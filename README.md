@@ -93,10 +93,18 @@
 
 ## Usage
 
-Launch Panopticon with elevated privileges (`sudo` on Linux/macOS or Administrator prompt on Windows):
+Launch Panopticon with elevated privileges. **Important:** `sudo` resets `PATH`, so after `source .venv/bin/activate` you must run the venv interpreter explicitly — do **not** use bare `sudo python` (it would use the system Python without scapy). Either:
 
 ```bash
-sudo python -m panopticon.analyzer [options]
+# option A — explicit venv python under sudo
+source .venv/bin/activate
+sudo "$VIRTUAL_ENV/bin/python" -m panopticon.analyzer [options]
+```
+
+```bash
+# option B — grant CAP_NET_RAW once, then run without sudo
+sudo setcap cap_net_raw,cap_net_admin=eip "$(readlink -f "$VIRTUAL_ENV/bin/python")"
+"$VIRTUAL_ENV/bin/python" -m panopticon.analyzer [options]
 ```
 
 ### Command-Line Flags
@@ -118,17 +126,17 @@ sudo python -m panopticon.analyzer [options]
 
 - **Capture on auto-detected default interface**:
   ```bash
-  sudo python -m panopticon.analyzer
+  sudo "$VIRTUAL_ENV/bin/python" -m panopticon.analyzer
   ```
 
 - **Sniff specific interface (`eth0`) filtering for HTTP/HTTPS**:
   ```bash
-  sudo python -m panopticon.analyzer -i eth0 --filter "tcp port 80 or tcp port 443"
+  sudo "$VIRTUAL_ENV/bin/python" -m panopticon.analyzer -i eth0 --filter "tcp port 80 or tcp port 443"
   ```
 
 - **Specify custom export files**:
   ```bash
-  sudo python -m panopticon.analyzer --export-pcap capture.pcap --export-csv flows.csv
+  sudo "$VIRTUAL_ENV/bin/python" -m panopticon.analyzer --export-pcap capture.pcap --export-csv flows.csv
   ```
 
 - **Stopping Capture**:

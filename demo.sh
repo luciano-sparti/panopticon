@@ -142,7 +142,8 @@ if want live; then
   else
     section "7/7 — live capture (5s on auto-detected interface, needs root)"
     note "Writes $WORKDIR/session.pcap and $WORKDIR/session.csv, then stops."
-    sudo "$PYEXEC" -m panopticon.analyzer \
+    note "Uses the venv python explicitly under sudo (sudo drops the venv from PATH)."
+    sudo "$VENV_DIR/bin/python" -m panopticon.analyzer \
       --export-pcap "$WORKDIR/session.pcap" \
       --export-csv  "$WORKDIR/session.csv" \
       --refresh 0.5 &
