@@ -2,8 +2,9 @@
 
 Drains a ``queue.Queue`` of ``(raw_bytes, PacketEvent)`` tuples produced by
 the capture thread, updates the shared ``StateStore``, runs detection
-synchronously (a no-op ``DetectorEngine`` hook until Phase 3 plugs in real
-heuristics), and feeds every event to the configured exporters.
+synchronously through a ``DetectorEngine`` (which forwards accepted
+``AlertEvent`` objects to the store), and feeds every event to the
+configured exporters.
 
 The worker runs on a daemon thread so the CLI never blocks on capture I/O;
 ``stop`` + ``drain`` provide a graceful shutdown path that processes the
@@ -16,29 +17,12 @@ import queue
 import threading
 from typing import Iterable, Optional
 
-from .core.event import AlertEvent, PacketEvent
+from .core.event import PacketEvent
 from .core.store import StateStore
+from .detection.base import DetectorEngine
 
 # How long the worker blocks on ``get`` when the queue is idle (seconds).
 POLL_INTERVAL = 0.2
-
-
-class DetectorEngine:
-    """Detection hook consumed by the pipeline (Phase 3 plugs in here).
-
-    Subclasses implement ``analyze`` and return an ``AlertEvent`` when
-    traffic looks suspicious; the pipeline calls it once per event.
-    """
-
-    def analyze(self, event: PacketEvent) -> Optional[AlertEvent]:
-        return None
-
-
-class NoopDetector(DetectorEngine):
-    """Placeholder detector: accepts everything, raises nothing."""
-
-    def analyze(self, event: PacketEvent) -> Optional[AlertEvent]:
-        return None
 
 
 class PipelineWorker(threading.Thread):
@@ -61,7 +45,7 @@ class PipelineWorker(threading.Thread):
         self._queue = packet_queue
         self._store = store
         self._exporters = tuple(exporters)
-        self._detector = detector if detector is not None else NoopDetector()
+        self._detector = detector if detector is not None else DetectorEngine(store)
         self._poll_interval = poll_interval
         self._stop = threading.Event()
 
@@ -93,6 +77,10 @@ class PipelineWorker(threading.Thread):
         for exporter in self._exporters:
             exporter.flush()
 
+    def prune(self, now: Optional[float] = None) -> int:
+        """Run detector housekeeping (expiry / dedup-map cleanup)."""
+        return self._detector.prune(now)
+
     # ------------------------------------------------------------------
     # Thread body
     # ------------------------------------------------------------------
@@ -108,6 +96,6 @@ class PipelineWorker(threading.Thread):
     def _process(self, raw: bytes, event: PacketEvent) -> None:
         """Record, detect, and export a single packet."""
         self._store.update(event)
-        self._detector.analyze(event)
+        self._detector.process_event(event, None, raw)
         for exporter in self._exporters:
             exporter.write(raw, event)

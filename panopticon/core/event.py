@@ -24,6 +24,8 @@ class PacketEvent:
         size: Total captured packet size in bytes (link-layer frame length).
         service: Well-known service name for ``dport`` (e.g. "http"), or
             empty string when unknown.
+        flags: TCP control flags string (e.g. "S", "SA", "R"), or empty
+            string for non-TCP traffic.
     """
 
     timestamp: float
@@ -34,6 +36,7 @@ class PacketEvent:
     dport: int
     size: int
     service: str
+    flags: str = ""
 
 
 @dataclass(frozen=True)

@@ -8,14 +8,16 @@ from scapy.utils import rdpcap
 
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
+from panopticon.detection.base import BaseDetector, DetectorEngine
+from panopticon.detection.syn_scan import SynScanDetector
 from panopticon.export.csv_writer import CsvExportWriter
 from panopticon.export.pcap_writer import PcapExportWriter
-from panopticon.pipeline import DetectorEngine, NoopDetector, PipelineWorker
+from panopticon.pipeline import PipelineWorker
 
 
 def ev(timestamp, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
-       sport=1000, dport=80, size=100):
-    return PacketEvent(timestamp, src, dst, proto, sport, dport, size, "http")
+       sport=1000, dport=80, size=100, flags=""):
+    return PacketEvent(timestamp, src, dst, proto, sport, dport, size, "http", flags)
 
 
 def wait_until(cond, timeout=5.0):
@@ -27,12 +29,14 @@ def wait_until(cond, timeout=5.0):
     return cond()
 
 
-class RecordingDetector(DetectorEngine):
+class RecordingDetector(BaseDetector):
     def __init__(self):
         self.seen = []
+        self.raws = []
 
-    def analyze(self, event):
+    def process_event(self, event, now, raw=None):
         self.seen.append(event)
+        self.raws.append(raw)
         return None
 
 
@@ -64,12 +68,31 @@ def test_worker_feeds_detector_synchronously():
         q.put((b"\x00" * 60, ev(float(i))))
     worker.drain()
     assert [e.timestamp for e in detector.seen] == [0.0, 1.0, 2.0, 3.0]
+    assert detector.raws == [b"\x00" * 60] * 4
 
 
-def test_noop_detector_accepts_everything():
-    detector = NoopDetector()
+def test_engine_without_detectors_is_noop():
+    store = StateStore()
+    engine = DetectorEngine(store)
+    assert engine.process_event(ev(0.0)) is None
+    assert engine.prune(now=0.0) == 0
+
+
+def test_worker_alerts_land_in_state_store():
+    q = queue.Queue()
+    store = StateStore()
+    engine = DetectorEngine(
+        store,
+        detectors=[SynScanDetector(threshold=1)],
+    )
+    worker = PipelineWorker(q, store, detector=engine)
     for i in range(3):
-        assert detector.analyze(ev(float(i))) is None
+        q.put((b"\x00" * 60, ev(float(i), dport=1000 + i, flags="S")))
+    worker.drain()
+    alerts = store.snapshot_alerts()
+    assert len(alerts) == 1
+    assert alerts[0].kind == "syn_scan"
+    assert store.snapshot_telemetry()["alerts_total"] == 1
 
 
 def test_drain_processes_pending_items_without_thread():

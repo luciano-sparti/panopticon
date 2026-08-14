@@ -112,3 +112,27 @@ def test_none_packet_returns_zeroed_event():
     assert ev.proto == "other"
     assert ev.timestamp == 0.0
     assert ev.size == 0
+
+
+def test_tcp_flags_are_parsed():
+    pkt = make(
+        Ether() / IP(src="10.0.0.1", dst="8.8.8.8") /
+        TCP(sport=40000, dport=80, flags="S"),
+    )
+    assert parse(pkt).flags == "S"
+
+
+def test_tcp_syn_ack_flags_are_parsed():
+    pkt = make(
+        Ether() / IP(src="8.8.8.8", dst="10.0.0.1") /
+        TCP(sport=80, dport=40000, flags="SA"),
+    )
+    assert parse(pkt).flags == "SA"
+
+
+def test_non_tcp_flags_are_empty():
+    pkt = make(
+        Ether() / IP(src="10.0.0.1", dst="8.8.8.8") /
+        UDP(sport=50000, dport=53),
+    )
+    assert parse(pkt).flags == ""

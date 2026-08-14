@@ -17,8 +17,14 @@ from typing import List, Optional
 
 from panopticon.capture import Sniffer, auto_detect_interface, preflight
 from panopticon.core.store import StateStore
+from panopticon.detection import (
+    DetectorEngine,
+    HighPortDetector,
+    PlaintextDetector,
+    SynScanDetector,
+)
 from panopticon.export import CsvExportWriter, PcapExportWriter
-from panopticon.pipeline import NoopDetector, PipelineWorker
+from panopticon.pipeline import PipelineWorker
 
 DEFAULT_REFRESH = 0.5
 DEFAULT_QUEUE_SIZE = 10000
@@ -62,6 +68,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_QUEUE_SIZE,
         help="Capture queue depth before packets are dropped (default: %(default)s)",
     )
+    parser.add_argument(
+        "--syn-threshold",
+        type=int,
+        default=20,
+        help="Distinct unresponded SYN targets that trigger a scan alert (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--syn-window",
+        type=float,
+        default=5.0,
+        help="Sliding window (s) for SYN-scan counting (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--high-port",
+        type=int,
+        default=49152,
+        help="Destination ports at/above this value raise high-port alerts (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--alert-cooldown",
+        type=float,
+        default=30.0,
+        help="Min seconds between accepted alerts of the same kind/source (default: %(default)s)",
+    )
     return parser
 
 
@@ -87,11 +117,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         PcapExportWriter(args.export_pcap),
         CsvExportWriter(args.export_csv),
     ]
+    detector = DetectorEngine(
+        store,
+        detectors=[
+            SynScanDetector(
+                threshold=args.syn_threshold,
+                window=args.syn_window,
+            ),
+            PlaintextDetector(),
+            HighPortDetector(threshold_port=args.high_port),
+        ],
+        cooldown=args.alert_cooldown,
+    )
     worker = PipelineWorker(
         packet_queue,
         store,
         exporters=exporters,
-        detector=NoopDetector(),
+        detector=detector,
     )
     sniffer = Sniffer(interface, packet_queue, store, bpf_filter=args.filter or None)
 
@@ -115,6 +157,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         while not shutdown.is_set():
             shutdown.wait(args.refresh)
             store.prune()
+            worker.prune()
     except KeyboardInterrupt:
         pass
     finally:

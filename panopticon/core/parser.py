@@ -67,6 +67,7 @@ def parse(pkt: Packet) -> PacketEvent:
     proto = "other"
     sport = 0
     dport = 0
+    flags = ""
 
     tcp = pkt.getlayer(TCP)
     udp = pkt.getlayer(UDP)
@@ -77,8 +78,9 @@ def parse(pkt: Packet) -> PacketEvent:
         try:
             sport = int(tcp.sport)
             dport = int(tcp.dport)
+            flags = str(tcp.flags)
         except (AttributeError, IndexError):
-            sport, dport = 0, 0
+            sport, dport, flags = 0, 0, ""
     elif udp is not None:
         proto = "udp"
         try:
@@ -99,6 +101,7 @@ def parse(pkt: Packet) -> PacketEvent:
         dport=dport,
         size=size,
         service=service,
+        flags=flags,
     )
 
 

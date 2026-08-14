@@ -14,10 +14,12 @@ import time
 from collections import deque
 from typing import Deque, Dict, List
 
-from .event import PacketEvent
+from .event import AlertEvent, PacketEvent
 
 # Rolling stream buffer length (kept on-screen / in UI).
 STREAM_MAXLEN = 500
+# Rolling alert buffer length (kept on-screen / in UI).
+ALERTS_MAXLEN = 200
 # Maximum tracked talker IPs; beyond this the least-recently-seen is evicted.
 MAX_TALKERS = 5000
 # Inactive talkers are purged when idle for longer than this (seconds).
@@ -36,6 +38,8 @@ class StateStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._stream: Deque[PacketEvent] = deque(maxlen=STREAM_MAXLEN)
+        self._alerts: Deque[AlertEvent] = deque(maxlen=ALERTS_MAXLEN)
+        self._alerts_total = 0
         self._top_talkers: Dict[str, Dict] = {}
         self._proto_counts: Dict[str, int] = {p: 0 for p in PROTOCOLS}
         self._total_packets = 0
@@ -89,6 +93,12 @@ class StateStore:
         with self._lock:
             self._dropped += count
 
+    def add_alert(self, alert: AlertEvent) -> None:
+        """Append a detector alert to the rolling buffer and counter."""
+        with self._lock:
+            self._alerts.append(alert)
+            self._alerts_total += 1
+
     def prune(self, now: float | None = None) -> int:
         """Purge talkers inactive for longer than ``TALKER_TTL`` seconds.
 
@@ -111,6 +121,11 @@ class StateStore:
         with self._lock:
             return copy.deepcopy(list(self._stream))
 
+    def snapshot_alerts(self) -> List[AlertEvent]:
+        """Deep-copied list of the most recent ``ALERTS_MAXLEN`` alerts."""
+        with self._lock:
+            return copy.deepcopy(list(self._alerts))
+
     def snapshot_talkers(self) -> Dict[str, Dict]:
         """Deep-copied top-talker map: {ip: {"pkts", "bytes", "last_seen"}}."""
         with self._lock:
@@ -131,6 +146,7 @@ class StateStore:
                 "total_packets": self._total_packets,
                 "total_bytes": self._total_bytes,
                 "dropped_packets": self._dropped,
+                "alerts_total": self._alerts_total,
             }
 
     # ------------------------------------------------------------------
