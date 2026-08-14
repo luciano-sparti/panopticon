@@ -6,6 +6,12 @@ extracts the expected fields, including the 'other'/fallback path.
 """
 from __future__ import annotations
 
+import logging
+
+# Keep the tour output clean: scapy warns (non-root) when resolving MACs for
+# synthetic frames; these are noise, not failures.
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+
 from scapy.all import Ether, IP, TCP, UDP, ICMP, Raw, Padding
 
 

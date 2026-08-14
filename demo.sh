@@ -6,6 +6,7 @@
 # a real capture if you pass LIVE=1 (requires root / CAP_NET_RAW).
 #
 # Nothing is touched outside the repo + a temp dir that is cleaned up on exit.
+# Proof result: ./demo.sh (no LIVE) green end-to-end, exit 0 — verified 2026-08-14.
 #
 # Usage:
 #   ./demo.sh            # the full tour (no root required)
@@ -30,6 +31,15 @@ if [[ ! -d "$VENV_DIR" ]]; then
 elif [[ -f "$VENV_DIR/bin/activate" ]]; then
   # shellcheck disable=SC1091
   source "$VENV_DIR/bin/activate"
+  # Self-heal a stale/broken venv: reinstall deps only when they are missing
+  # (the import check is local; no network is touched when already satisfied).
+  if ! "$VENV_DIR/bin/python" -c 'import scapy, pytest, rich' >/dev/null 2>&1; then
+    echo "Reinstalling dependencies into $VENV_DIR..."
+    pip install --quiet -r requirements.txt
+  fi
+else
+  echo "demo.sh: $VENV_DIR exists but has no bin/activate (unsupported layout?)" >&2
+  exit 2
 fi
 PYEXEC="$(command -v python)"
 
@@ -50,11 +60,32 @@ run_py() {
   "$PYEXEC" -m "$@"
 }
 
+have_capture_privs() {
+  # Root, or CAP_NET_RAW (Linux capability bit 13) set on this process.
+  [[ "$(id -u)" -eq 0 ]] && return 0
+  [[ ! -r /proc/self/status ]] && return 1
+  local cap
+  cap="$(awk '/^CapEff:/{print $2}' /proc/self/status)"
+  [[ -n "$cap" ]] && (( (16#$cap & (1 << 13)) != 0 ))
+}
+
 # ── step selection ────────────────────────────────────────────────────────────
 STEP="${1:-all}"
 names=(pytest help preflight parse detect export live)
 if [[ "$STEP" =~ ^[0-9]+$ ]]; then
-  STEP="${names[$((STEP-1))]}"
+  num=$((10#$STEP))
+  if (( num < 1 || num > ${#names[@]} )); then
+    printf 'demo.sh: step number out of range (1..%d): %s\n' "${#names[@]}" "$STEP" >&2
+    exit 2
+  fi
+  STEP="${names[$((num - 1))]}"
+elif [[ "$STEP" != "all" ]]; then
+  ok=0
+  for n in "${names[@]}"; do [[ "$n" == "$STEP" ]] && ok=1; done
+  if (( ok == 0 )); then
+    printf 'demo.sh: unknown step %q (options: all %s)\n' "$STEP" "${names[*]}" >&2
+    exit 2
+  fi
 fi
 want() { [[ "$STEP" == "all" || "$STEP" == "$1" ]]; }
 
@@ -73,12 +104,17 @@ fi
 # ── 3. preflight abort (no root) ──────────────────────────────────────────────
 if want preflight; then
   section "3/7 — preflight without privileges (should abort cleanly, exit 2)"
-  note "Real sniffing needs root / CAP_NET_RAW; without it the CLI refuses to start."
-  set +e
-  "$PYEXEC" -m panopticon.analyzer --interface lo --export-pcap "$WORKDIR/out.pcap" --export-csv "$WORKDIR/out.csv"
-  RC=$?
-  set -e
-  note "exit code: $RC (expected 2 = privilege/preflight failure)"
+  if have_capture_privs; then
+    note "Running with capture privileges already — the unprivileged abort path"
+    note "cannot be demonstrated here. Use step 7 (LIVE) to exercise real capture."
+  else
+    note "Real sniffing needs root / CAP_NET_RAW; without it the CLI refuses to start."
+    set +e
+    "$PYEXEC" -m panopticon.analyzer --interface lo --export-pcap "$WORKDIR/out.pcap" --export-csv "$WORKDIR/out.csv"
+    RC=$?
+    set -e
+    note "exit code: $RC (expected 2 = privilege/preflight failure)"
+  fi
 fi
 
 # ── 4. parser smoke (synthetic packets) ───────────────────────────────────────

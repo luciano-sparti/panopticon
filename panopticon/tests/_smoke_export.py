@@ -7,8 +7,13 @@ the files back to confirm they are valid and complete.
 from __future__ import annotations
 
 import csv
+import logging
 import os
 import tempfile
+
+# Keep the tour output clean: scapy warns (non-root) when resolving MACs for
+# synthetic frames; these are noise, not failures.
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 from scapy.all import Ether, IP, TCP, Raw, rdpcap
 
