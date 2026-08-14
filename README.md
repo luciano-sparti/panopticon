@@ -1,195 +1,137 @@
-# Panopticon — Network Traffic Analyzer & Mini-NIDS Dashboard
+# Panopticon
 
-A terminal-based, real-time network traffic analyzer and lightweight intrusion detection system (NIDS) built in Python. It captures live packets, renders a live-updating dashboard in the terminal, flags suspicious activity, and exports session data for further forensics in Wireshark.
+> A terminal real-time network traffic analyzer and lightweight network intrusion detection system (NIDS) built in Python using Scapy and Rich.
 
-> ⚠️ **Legal notice:** Only capture traffic on networks and devices you own or have explicit written permission to monitor. Unauthorized packet capture may violate local laws (e.g., wiretapping/computer misuse statutes). This tool is for educational and authorized security-testing use only.
+⚠️ **Authorized-Use & Legal Notice**: Only capture traffic on networks and systems you own or have explicit written permission to monitor. Unauthorized packet inspection may violate local and federal laws (such as wiretapping and computer misuse statutes). This tool is strictly for educational, research, and authorized defensive security testing purposes.
+
+---
+
+## Current Status
+
+- ✅ **Phase 1 & Phase 2 Complete** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, and CLI entry point implemented with **43 unit tests passing**.
+- ⏳ **Phase 3 – Phase 5 Pending** — Threat detection engine & anomaly heuristics (Phase 3), Rich terminal interactive UI dashboard (Phase 4), and rule configuration & advanced threat analytics (Phase 5).
 
 ---
 
 ## Features
 
-- **Live packet capture** using Scapy's sniffing engine, with per-packet metadata parsing (timestamp, src/dst IP, protocol, service/port, size).
-- **Real-time terminal UI** built with [Rich](https://github.com/Textualize/rich) — auto-refreshing tables, panels, and a live layout (no flicker, no manual clearing).
-- **Traffic velocity tracking** — packets/sec, average packet size, protocol mix (TCP/UDP/ICMP %).
-- **Top talkers panel** — ranks source IPs by packet count and data volume, with a simple ASCII/text volume bar.
-- **Anomaly / threat flagging**, including:
-  - TCP SYN scan detection (many SYNs, no completed handshake, from one source in a short window)
-  - Unencrypted traffic detection (plaintext HTTP, Telnet, FTP control channel, etc.)
-  - High/unusual destination port activity
-- **Session export** to `.pcap` (via `scapy.wrpcap`) and `.csv` (via the `csv` module) for later analysis in Wireshark or spreadsheets.
-- **Keyboard control** — press `q` to gracefully stop capture and exit.
+- **Live Asynchronous Packet Capture**: Employs Scapy's `AsyncSniffer` in a dedicated background thread with non-blocking queueing to prevent packet drops during high throughput.
+- **Protocol & Metadata Parsing**: Extracts timestamp, source/destination IPs, layer 4 protocols (TCP/UDP/ICMP), service ports, and packet lengths into normalized `PacketEvent` structures.
+- **State Tracking & Telemetry**: Maintains rolling traffic metrics, protocol distribution percentages, top talker IP statistics, and dropped frame counts via `StateStore`.
+- **Dual Streaming Exporters**: Concurrently writes raw frames to `.pcap` (via Scapy `RawPcapWriter`) and flow statistics to `.csv` for forensic analysis in Wireshark or analytical tools.
+- **Clean Pipeline & Shutdown**: Signal-aware worker pipeline (handling `SIGINT`/`SIGTERM`, `CTRL-C` or `q`) that gracefully drains in-flight capture queues and flushes disk buffers on exit.
 
 ---
 
 ## Architecture
 
 ```
-┌────────────────────┐
-│   Sniffer thread    │  scapy.sniff(prn=callback, store=False)
-└─────────┬───────────┘
-          │ raw packets
-          ▼
-┌────────────────────┐
-│  Packet Parser       │  extract IPs, proto, ports, size, service name
-└─────────┬───────────┘
-          │ normalized event
-          ▼
-┌────────────────────┐     ┌──────────────────────┐
-│  State Store         │────▶│  Anomaly Detector      │
-│ (rolling buffers,     │     │ (SYN-scan, plaintext,  │
-│  counters, top-N)     │     │  high-port heuristics) │
-└─────────┬───────────┘     └──────────┬────────────┘
-          │                              │
-          ▼                              ▼
-┌─────────────────────────────────────────────┐
-│           Rich Live Dashboard (UI thread)      │
-│  Packet stream table | Top talkers | Telemetry │
-└─────────────────────────────────────────────┘
-          │
-          ▼
-   PCAP / CSV export on exit
+┌────────────────────────┐
+│  Scapy AsyncSniffer    │  (Capture thread, store=False)
+└───────────┬────────────┘
+            │ raw frames
+            ▼
+┌────────────────────────┐
+│  Packet Parser         │  (Extract IPs, protocols, ports, payload size)
+└───────────┬────────────┘
+            │ PacketEvent
+            ▼
+┌────────────────────────┐
+│  Bounded Thread Queue  │  (Non-blocking queueing)
+└───────────┬────────────┘
+            │
+            ▼
+┌────────────────────────┐      ┌────────────────────────┐
+│  Pipeline Worker       │ ────▶│  State Store           │  (Telemetry & Top Talkers)
+└───────────┬────────────┘      └────────────────────────┘
+            │
+            ├───────────────────▶ Detector Engine (Phase 3 Hook)
+            │
+            ▼
+┌────────────────────────┐
+│  Exporters (PCAP/CSV)  │ ────▶ session.pcap & session.csv
+└────────────────────────┘
 ```
-
-Capture runs in a background thread (or async loop) so the UI can redraw independently at a fixed interval (e.g., every 0.5–1s) without blocking on packet I/O.
 
 ---
 
-## Tech Stack
+## Prerequisites & Requirements
 
-| Component        | Library                          |
-|-------------------|-----------------------------------|
-| Packet capture     | `scapy` (`sniff`, `AsyncSniffer`) |
-| Terminal UI        | `rich` (`Live`, `Table`, `Panel`, `Layout`) |
-| CLI args           | `argparse`                       |
-| Data export        | `scapy.utils.wrpcap`, built-in `csv` |
-| Threading          | `threading` / `queue` for producer-consumer between sniffer and UI |
-
----
-
-## Requirements
-
-```
-Python 3.9+
-scapy>=2.5.0
-rich>=13.0.0
-```
-
-Packet capture requires elevated privileges:
-- **Linux/macOS:** run with `sudo`, or grant the interpreter `CAP_NET_RAW`/`CAP_NET_ADMIN` via `setcap`.
-- **Windows:** install [Npcap](https://npcap.com/) first, then run the terminal as Administrator.
+- **Python**: `3.9+`
+- **Dependencies**: `scapy>=2.5.0`, `rich>=13.0.0`, `pytest>=7.0.0`
+- **Elevated Privileges**: Raw socket sniffing requires administrator privileges:
+  - **Linux / macOS**: Run with `sudo` or assign raw network capabilities (`sudo setcap cap_net_raw,cap_net_admin=eip $(which python3)`).
+  - **Windows**: Install [Npcap](https://npcap.com/) (with WinPcap API compatibility enabled) and run shell as Administrator.
 
 ---
 
 ## Installation
 
-```bash
-git clone https://github.com/<your-username>/mini-nids-dashboard.git
-cd mini-nids-dashboard
-python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/luciano-sparti/panopticon.git
+   cd panopticon
+   ```
 
-`requirements.txt`:
-```
-scapy
-rich
-```
+2. **Create and activate a virtual environment**:
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate    # On Windows: .venv\Scripts\activate
+   ```
+
+3. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Run tests**:
+   ```bash
+   pytest
+   ```
 
 ---
 
 ## Usage
 
+Launch Panopticon with elevated privileges (`sudo` on Linux/macOS or Administrator prompt on Windows):
+
 ```bash
-sudo python analyzer.py --interface eth0
+sudo python -m panopticon.analyzer [options]
 ```
 
-Common flags:
+### Command-Line Flags
 
-| Flag               | Description                                      | Default   |
-|---------------------|--------------------------------------------------|-----------|
-| `--interface, -i`   | Network interface to sniff on                    | auto-detect |
-| `--filter`          | BPF filter (e.g. `"tcp or udp"`)                 | none      |
-| `--refresh`         | Dashboard refresh rate (seconds)                 | `0.5`     |
-| `--export-pcap`     | Path to write captured packets on exit           | `session.pcap` |
-| `--export-csv`      | Path to write flow log on exit                   | `session.csv`  |
-| `--syn-threshold`   | SYNs/sec from one source to trigger scan alert   | `20`      |
+| Flag | Short | Description | Default |
+|---|---|---|---|
+| `--interface` | `-i` | Network interface to sniff on | Auto-detected |
+| `--filter` | | BPF (Berkeley Packet Filter) string (e.g. `"tcp or udp"`) | None |
+| `--export-pcap` | | Output path for raw captured packets | `session.pcap` |
+| `--export-csv` | | Output path for CSV flow log | `session.csv` |
+| `--refresh` | | State maintenance loop interval in seconds | `0.5` |
+| `--queue-size` | | Capture queue depth before dropping frames | `10000` |
 
-Press **`q`** at any time to stop capture cleanly and write exports.
+### Usage Examples
 
----
+- **Capture on auto-detected default interface**:
+  ```bash
+  sudo python -m panopticon.analyzer
+  ```
 
-## Building the Dashboard UI (Rich)
+- **Sniff specific interface (`eth0`) filtering for HTTP/HTTPS**:
+  ```bash
+  sudo python -m panopticon.analyzer -i eth0 --filter "tcp port 80 or tcp port 443"
+  ```
 
-The layout in the screenshot maps roughly to three Rich components:
+- **Specify custom export files**:
+  ```bash
+  sudo python -m panopticon.analyzer --export-pcap capture.pcap --export-csv flows.csv
+  ```
 
-1. **`Table`** for the live packet stream (Date, Time, Source IP, Destination IP, Protocol, Service, Size) — new rows appended, old rows trimmed to keep it on-screen.
-2. **`Table` + `Panel`** side-by-side (via `Layout().split_row`) for:
-   - Top Network Generators (source IP, packet count, data volume, bar)
-   - Telemetry & Watchlist (velocity, status, unique hosts, protocol mix, flagged high ports)
-3. Wrap everything in `rich.live.Live(layout, refresh_per_second=2)` so the whole screen redraws in place.
-
-Minimal skeleton:
-
-```python
-from rich.live import Live
-from rich.layout import Layout
-from rich.table import Table
-
-def build_layout(state) -> Layout:
-    layout = Layout()
-    layout.split_column(
-        Layout(name="stream", ratio=2),
-        Layout(name="lower", ratio=1),
-    )
-    layout["lower"].split_row(Layout(name="top_talkers"), Layout(name="telemetry"))
-    layout["stream"].update(render_stream_table(state))
-    layout["top_talkers"].update(render_top_talkers(state))
-    layout["telemetry"].update(render_telemetry_panel(state))
-    return layout
-
-with Live(build_layout(state), refresh_per_second=2, screen=True) as live:
-    while running:
-        live.update(build_layout(state))
-```
-
----
-
-## Anomaly Detection Logic (simplified)
-
-- **SYN scan:** maintain a rolling window (e.g. last 5s) of `(src_ip, dst_port, flags)`. If a single source sends SYNs to many distinct ports/hosts without matching SYN-ACKs, flag it.
-- **Unencrypted traffic:** match on well-known plaintext ports/services (80, 21, 23, unencrypted 25) or inspect payload for cleartext credentials patterns; flag as "unencrypted traffic" in the telemetry panel.
-- **High ports:** flag any connection using ephemeral/uncommon high ports (>49152) as informational, not necessarily malicious.
-
-These are heuristics for learning purposes, not production-grade signatures — a real NIDS (Suricata/Snort/Zeek) uses far more rigorous rule sets and statistical baselining.
-
----
-
-## Project Structure
-
-```
-mini-nids-dashboard/
-├── analyzer.py          # entry point, CLI, capture loop
-├── ui/
-│   └── dashboard.py      # Rich layout & rendering
-├── detection/
-│   └── heuristics.py     # SYN-scan, plaintext, high-port checks
-├── export/
-│   └── writers.py        # PCAP/CSV export helpers
-├── requirements.txt
-└── README.md
-```
-
----
-
-## Roadmap Ideas
-
-- GeoIP lookups for source addresses
-- Configurable alert rules loaded from YAML
-- Web-based dashboard (FastAPI + WebSockets) as an alternative to the terminal UI
-- Integration with Suricata rule format for signature-based detection
+- **Stopping Capture**:
+  Press **`CTRL-C`** (or `q`) to trigger graceful shutdown. Panopticon closes the sniffer socket, drains remaining queue items through the pipeline, flushes exporters to disk, and prints summary telemetry.
 
 ---
 
 ## License
 
-MIT — for educational and authorized security research use only.
+Distributed under the MIT License. Strictly for authorized security analysis and educational monitoring.
