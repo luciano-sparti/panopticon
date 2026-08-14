@@ -1,9 +1,10 @@
-"""Panopticon CLI entry point (Phase 2 wiring).
+"""Panopticon CLI entry point (Phases 2 + 4 wiring).
 
 Starts the sniffer + pipeline worker + streaming exporters, maintains the
-state store, and shuts everything down gracefully on SIGINT/SIGTERM: the
-sniffer socket is closed, the queue is drained, and exporters are flushed.
-The Rich dashboard and q-to-quit land in Phase 4.
+state store, drives the Rich snapshot dashboard + non-blocking q-to-quit
+(``--no-ui`` disables it for headless/CI), and shuts everything down
+gracefully on SIGINT/SIGTERM or the ``q`` key: the sniffer socket is closed,
+the queue is drained, and exporters are flushed.
 
 Clock contract: alert dedup (``DetectorEngine``), detector TTL pruning, and
 the state-store talker TTL all assume a single consistent clock. Live
@@ -35,6 +36,7 @@ from panopticon.detection import (
 )
 from panopticon.export import CsvExportWriter, PcapExportWriter
 from panopticon.pipeline import PipelineWorker
+from panopticon.ui import KeyboardWatcher, build_dashboard
 
 DEFAULT_REFRESH = 0.5
 DEFAULT_QUEUE_SIZE = 10000
@@ -102,6 +104,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=30.0,
         help="Min seconds between accepted alerts of the same kind/source (default: %(default)s)",
     )
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Disable the Rich dashboard and keyboard watcher (headless/CI)",
+    )
     return parser
 
 
@@ -156,6 +163,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     sniffer = Sniffer(interface, packet_queue, store, bpf_filter=args.filter or None)
 
     shutdown = threading.Event()
+    keyboard_stop = threading.Event()
 
     def _request_shutdown(signum, frame):
         shutdown.set()
@@ -165,17 +173,24 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     worker.start()
     sniffer.start()
+    keyboard = None
+    if not args.no_ui:
+        keyboard = KeyboardWatcher(keyboard_stop).start()
     print(
         f"panopticon: capturing on {interface}"
         + (f" with BPF filter {args.filter!r}" if args.filter else "")
-        + " — Ctrl+C to stop"
+        + " — Ctrl+C or q to stop"
     )
 
     reported_worker_errors = 0
-    try:
-        while not shutdown.is_set():
+
+    def run_loop():
+        nonlocal reported_worker_errors
+        while not shutdown.is_set() and not keyboard_stop.is_set():
             shutdown.wait(args.refresh)
             now = time.time()
+            if keyboard_stop.is_set():
+                break
             if sniffer.capture_failed:
                 reason = sniffer.exception
                 message = "capture stopped unexpectedly"
@@ -191,10 +206,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 reported_worker_errors = worker.error_count
             store.prune(now)
             worker.prune(now)
+
+    try:
+        if args.no_ui:
+            run_loop()
+        else:
+            # Drive the dashboard from Live's refresh thread, which reads
+            # store snapshots only; the maintenance loop runs alongside it.
+            ui_refresh_per_second = 1.0 / max(args.refresh, 1e-3)
+            dashboard = build_dashboard(store, refresh_per_second=ui_refresh_per_second)
+            with dashboard:
+                run_loop()
     except KeyboardInterrupt:
         pass
     finally:
         shutdown.set()
+        keyboard_stop.set()
+        if keyboard is not None:
+            keyboard.stop()
         sniffer.stop()
         sniffer.join(timeout=5)
         worker.stop()
