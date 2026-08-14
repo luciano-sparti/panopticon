@@ -10,3 +10,6 @@ env/
 # OS / editor
 .DS_Store
 *.swp
+
+# smoke-test scratch output
+_smoke_export_out/
