@@ -49,6 +49,15 @@ class TestVelocityEWMA:
         # Converges toward ~1.0 pps for a 1 packet/sec stream.
         assert store.snapshot_telemetry()["packets_per_sec"] == pytest.approx(1.0, abs=0.1)
 
+    def test_zero_delta_burst_updates_velocity(self):
+        store = StateStore()
+        store.update(ev(0.0), now=0.0)
+        store.update(ev(0.0), now=0.0)  # same timestamp: dt is clamped, not skipped
+        tele = store.snapshot_telemetry()
+        assert tele["packets_per_sec"] == pytest.approx(1e5, rel=1e-3)
+        assert tele["bytes_per_sec"] == pytest.approx(1e7, rel=1e-3)
+        assert tele["avg_packet_size"] == pytest.approx(100.0)
+
 
 class TestSnapshots:
     def test_talker_snapshot_is_deep_copy(self):

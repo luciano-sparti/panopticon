@@ -28,6 +28,11 @@ TALKER_TTL = 300
 EWMA_ALPHA = 0.9
 EWMA_BETA = 0.1
 
+# Minimum inter-packet delta (seconds) used for velocity estimates; clamps
+# same-timestamp bursts so instantaneous rates stay finite instead of the
+# EWMA freezing while the timestamp never advances.
+MIN_DT_EPSILON = 1e-6
+
 # Protocol buckets for the protocol-mix percentages.
 PROTOCOLS = ("tcp", "udp", "icmp", "other")
 
@@ -155,14 +160,13 @@ class StateStore:
 
     def _update_velocity(self, ts: float, size: int) -> None:
         if self._velocity_init:
-            dt = ts - self._last_update
-            if dt > 0:
-                inst_pps = 1.0 / dt
-                inst_bps = size / dt
-                self._pps = EWMA_ALPHA * self._pps + EWMA_BETA * inst_pps
-                self._bytes_sec = (
-                    EWMA_ALPHA * self._bytes_sec + EWMA_BETA * inst_bps
-                )
+            dt = max(ts - self._last_update, MIN_DT_EPSILON)
+            inst_pps = 1.0 / dt
+            inst_bps = size / dt
+            self._pps = EWMA_ALPHA * self._pps + EWMA_BETA * inst_pps
+            self._bytes_sec = (
+                EWMA_ALPHA * self._bytes_sec + EWMA_BETA * inst_bps
+            )
             self._avg_size = EWMA_ALPHA * self._avg_size + EWMA_BETA * size
         else:
             self._avg_size = float(size)

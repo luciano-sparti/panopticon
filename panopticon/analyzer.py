@@ -4,6 +4,15 @@ Starts the sniffer + pipeline worker + streaming exporters, maintains the
 state store, and shuts everything down gracefully on SIGINT/SIGTERM: the
 sniffer socket is closed, the queue is drained, and exporters are flushed.
 The Rich dashboard and q-to-quit land in Phase 4.
+
+Clock contract: alert dedup (``DetectorEngine``), detector TTL pruning, and
+the state-store talker TTL all assume a single consistent clock. Live
+captures satisfy this because ``PacketEvent.timestamp`` (epoch, from
+``pkt.time``) and the prune wall clock are the same time base; the prune
+loop passes one ``now`` to every prune call so they stay consistent with
+each other. Synthetic/replayed feeds must put ``event.timestamp`` on a
+single monotonic clock (and use the same ``now`` for pruning) so that state
+is not purged out from under the pipeline.
 """
 
 from __future__ import annotations
@@ -13,6 +22,7 @@ import queue
 import signal
 import sys
 import threading
+import time
 from typing import List, Optional
 
 from panopticon.capture import Sniffer, auto_detect_interface, preflight
@@ -113,10 +123,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     store = StateStore()
     packet_queue: queue.Queue = queue.Queue(maxsize=args.queue_size)
-    exporters = [
-        PcapExportWriter(args.export_pcap),
-        CsvExportWriter(args.export_csv),
-    ]
+    try:
+        exporters = [
+            PcapExportWriter(args.export_pcap),
+            CsvExportWriter(args.export_csv),
+        ]
+    except OSError as exc:
+        print(
+            f"panopticon: could not open export files "
+            f"({args.export_pcap}, {args.export_csv}): {exc}",
+            file=sys.stderr,
+        )
+        return 2
     detector = DetectorEngine(
         store,
         detectors=[
@@ -153,11 +171,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         + " — Ctrl+C to stop"
     )
 
+    reported_worker_errors = 0
     try:
         while not shutdown.is_set():
             shutdown.wait(args.refresh)
-            store.prune()
-            worker.prune()
+            now = time.time()
+            if sniffer.capture_failed:
+                reason = sniffer.exception
+                message = "capture stopped unexpectedly"
+                if reason is not None:
+                    message += f" ({reason})"
+                print(f"panopticon: {message}.", file=sys.stderr)
+                break
+            if worker.error_count > reported_worker_errors:
+                print(
+                    f"panopticon: pipeline error: {worker.last_error}",
+                    file=sys.stderr,
+                )
+                reported_worker_errors = worker.error_count
+            store.prune(now)
+            worker.prune(now)
     except KeyboardInterrupt:
         pass
     finally:
@@ -165,7 +198,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         sniffer.stop()
         sniffer.join(timeout=5)
         worker.stop()
-        worker.join(timeout=5)
+        worker.join()
         drained = worker.drain()
         worker.flush()
         for exporter in exporters:
@@ -175,8 +208,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(
         f"panopticon: stopped — {telemetry['total_packets']} packets, "
         f"{telemetry['dropped_packets']} dropped, {drained} drained, "
+        f"{telemetry['alerts_total']} alerts, "
         f"exports: {args.export_pcap}, {args.export_csv}"
     )
+    for alert in store.snapshot_alerts():
+        print(f"  [{alert.severity}] {alert.kind}: {alert.summary}")
     return 0
 
 

@@ -8,8 +8,8 @@
 
 ## Current Status
 
-- ✅ **Phase 1 & Phase 2 Complete** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, and CLI entry point implemented with **43 unit tests passing**.
-- ⏳ **Phase 3 – Phase 5 Pending** — Threat detection engine & anomaly heuristics (Phase 3), Rich terminal interactive UI dashboard (Phase 4), and rule configuration & advanced threat analytics (Phase 5).
+- ✅ **Phase 1, 2 & 3 Complete** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, and threat detection engine (SYN-scan, plaintext, and high-port heuristics) implemented with **107 unit/integration tests passing**.
+- ⏳ **Phase 4 & Phase 5 Pending** — Rich terminal interactive UI dashboard (Phase 4), and rule configuration & advanced threat analytics (Phase 5).
 
 ---
 
@@ -18,8 +18,8 @@
 - **Live Asynchronous Packet Capture**: Employs Scapy's `AsyncSniffer` in a dedicated background thread with non-blocking queueing to prevent packet drops during high throughput.
 - **Protocol & Metadata Parsing**: Extracts timestamp, source/destination IPs, layer 4 protocols (TCP/UDP/ICMP), service ports, and packet lengths into normalized `PacketEvent` structures.
 - **State Tracking & Telemetry**: Maintains rolling traffic metrics, protocol distribution percentages, top talker IP statistics, and dropped frame counts via `StateStore`.
-- **Dual Streaming Exporters**: Concurrently writes raw frames to `.pcap` (via Scapy `RawPcapWriter`) and flow statistics to `.csv` for forensic analysis in Wireshark or analytical tools.
-- **Clean Pipeline & Shutdown**: Signal-aware worker pipeline (handling `SIGINT`/`SIGTERM`, `CTRL-C` or `q`) that gracefully drains in-flight capture queues and flushes disk buffers on exit.
+- **Dual Streaming Exporters**: Concurrently writes raw frames to `.pcap` (via Scapy `PcapWriter`, append mode, linktype auto-inferred from the first frame) and flow statistics to `.csv` (append mode, header written once) for forensic analysis in Wireshark or analytical tools.
+- **Clean Pipeline & Shutdown**: Signal-aware worker pipeline (handling `SIGINT`/`SIGTERM` / `CTRL-C`) that gracefully drains in-flight capture queues and flushes disk buffers on exit. The detector engine raises `syn_scan`, `plaintext`, and `high_port` alerts, which are summarized in the shutdown telemetry.
 
 ---
 
@@ -45,7 +45,7 @@
 │  Pipeline Worker       │ ────▶│  State Store           │  (Telemetry & Top Talkers)
 └───────────┬────────────┘      └────────────────────────┘
             │
-            ├───────────────────▶ Detector Engine (Phase 3 Hook)
+            ├───────────────────▶ Detector Engine (SYN-scan, plaintext, high-port)
             │
             ▼
 ┌────────────────────────┐
@@ -109,6 +109,10 @@ sudo python -m panopticon.analyzer [options]
 | `--export-csv` | | Output path for CSV flow log | `session.csv` |
 | `--refresh` | | State maintenance loop interval in seconds | `0.5` |
 | `--queue-size` | | Capture queue depth before dropping frames | `10000` |
+| `--syn-threshold` | | Distinct unresponded SYN targets that trigger a scan alert | `20` |
+| `--syn-window` | | Sliding window (s) for SYN-scan counting | `5.0` |
+| `--high-port` | | Destination ports at or above this value raise high-port alerts | `49152` |
+| `--alert-cooldown` | | Min seconds between accepted alerts of the same kind/source | `30.0` |
 
 ### Usage Examples
 
@@ -128,7 +132,7 @@ sudo python -m panopticon.analyzer [options]
   ```
 
 - **Stopping Capture**:
-  Press **`CTRL-C`** (or `q`) to trigger graceful shutdown. Panopticon closes the sniffer socket, drains remaining queue items through the pipeline, flushes exporters to disk, and prints summary telemetry.
+  Press **`CTRL-C`** to trigger graceful shutdown. Panopticon closes the sniffer socket, drains remaining queue items through the pipeline, flushes exporters to disk, and prints summary telemetry (including any detector alerts).
 
 ---
 

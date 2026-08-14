@@ -1,6 +1,9 @@
 """Plaintext-detector tests using synthetic events / raw frames."""
 
 import pytest
+from scapy.layers.inet import IP, TCP
+from scapy.layers.l2 import Ether
+from scapy.packet import Raw
 
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
@@ -29,6 +32,81 @@ def test_source_port_based_plaintext():
     )
     assert alert is not None
     assert "ftp" in alert.summary
+
+
+def test_source_port_plaintext_reports_matching_port_and_direction():
+    detector = PlaintextDetector()
+    alert = detector.process_event(
+        ev(1.0, sport=21, dport=54321, service="ephemeral"), 1.0,
+    )
+    assert alert is not None
+    assert "port 21" in alert.summary
+    assert "from" in alert.summary
+    assert "54321" not in alert.summary
+
+
+def test_destination_port_plaintext_reports_direction():
+    detector = PlaintextDetector()
+    alert = detector.process_event(ev(1.0, dport=80), 1.0)
+    assert alert is not None
+    assert "port 80" in alert.summary
+    assert "to" in alert.summary
+
+
+def test_raw_none_path_is_noop_without_port_hit():
+    detector = PlaintextDetector()
+    assert detector.process_event(
+        ev(1.0, dport=443, service="https"), 1.0, raw=None,
+    ) is None
+    # Port tier still fires without raw payload.
+    assert detector.process_event(
+        ev(2.0, dport=80, service="http"), 2.0, raw=None,
+    ) is not None
+
+
+def test_payload_marker_found_inside_real_frame():
+    detector = PlaintextDetector()
+    frame = (
+        Ether()
+        / IP(src="1.2.3.4", dst="8.8.8.8")
+        / TCP(sport=40000, dport=443)
+        / Raw(b"GET /secret HTTP/1.1\r\n")
+    )
+    alert = detector.process_event(
+        ev(1.0, dport=443, service="https"), 1.0, raw=bytes(frame),
+    )
+    assert alert is not None
+    assert alert.severity == "info"
+
+
+def test_payload_scan_ignores_marker_in_ip_headers():
+    detector = PlaintextDetector()
+    # Src IP "71.69.84.32" is "GET " and dst IP starts with 47 ('/'), so
+    # the header bytes literally contain b"GET /" without any payload.
+    frame = (
+        Ether()
+        / IP(src="71.69.84.32", dst="47.1.2.3")
+        / TCP(sport=40000, dport=443, flags="A")
+        / Raw(b"no markers")
+    )
+    raw = bytes(frame)
+    assert b"GET /" in raw
+    assert detector.process_event(
+        ev(1.0, dport=443, service="https"), 1.0, raw=raw,
+    ) is None
+
+
+def test_payload_scan_budget_applies_to_payload_only():
+    detector = PlaintextDetector(max_scan_bytes=8)
+    frame = (
+        Ether()
+        / IP(src="1.2.3.4", dst="8.8.8.8")
+        / TCP(sport=40000, dport=443)
+        / Raw(b"abcdefghGET /x")
+    )
+    assert detector.process_event(
+        ev(1.0, dport=443, service="https"), 1.0, raw=bytes(frame),
+    ) is None
 
 
 def test_credential_marker_warn():

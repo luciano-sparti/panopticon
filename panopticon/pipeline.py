@@ -31,6 +31,10 @@ class PipelineWorker(threading.Thread):
     Wires capture -> store -> detect -> export. Uses the normal ``Thread``
     lifecycle (``start`` / ``join``); ``stop`` + ``drain`` + ``flush``
     implement graceful shutdown.
+
+    Exporter/detector errors are contained: the offending packet is skipped
+    and the error is recorded via :attr:`error_count` / :attr:`last_error`
+    instead of killing the worker thread.
     """
 
     def __init__(
@@ -48,6 +52,26 @@ class PipelineWorker(threading.Thread):
         self._detector = detector if detector is not None else DetectorEngine(store)
         self._poll_interval = poll_interval
         self._stop = threading.Event()
+        self._error_count = 0
+        self._last_error: Optional[str] = None
+        self._error_lock = threading.Lock()
+
+    @property
+    def error_count(self) -> int:
+        """Number of packets skipped because of exporter/detector errors."""
+        with self._error_lock:
+            return self._error_count
+
+    @property
+    def last_error(self) -> Optional[str]:
+        """Human-readable description of the most recent processing error."""
+        with self._error_lock:
+            return self._last_error
+
+    def _record_error(self, exc: BaseException) -> None:
+        with self._error_lock:
+            self._error_count += 1
+            self._last_error = f"{type(exc).__name__}: {exc}"
 
     # ------------------------------------------------------------------
     # Lifecycle (graceful shutdown)
@@ -68,7 +92,10 @@ class PipelineWorker(threading.Thread):
                 raw, event = self._queue.get_nowait()
             except queue.Empty:
                 break
-            self._process(raw, event)
+            try:
+                self._process(raw, event)
+            except Exception as exc:  # noqa: BLE001 - contained, see #9
+                self._record_error(exc)
             count += 1
         return count
 
@@ -91,7 +118,10 @@ class PipelineWorker(threading.Thread):
                 raw, event = self._queue.get(timeout=self._poll_interval)
             except queue.Empty:
                 continue
-            self._process(raw, event)
+            try:
+                self._process(raw, event)
+            except Exception as exc:  # noqa: BLE001 - contained, see #9
+                self._record_error(exc)
 
     def _process(self, raw: bytes, event: PacketEvent) -> None:
         """Record, detect, and export a single packet."""

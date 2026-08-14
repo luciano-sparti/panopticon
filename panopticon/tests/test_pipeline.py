@@ -10,6 +10,7 @@ from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
 from panopticon.detection.base import BaseDetector, DetectorEngine
 from panopticon.detection.syn_scan import SynScanDetector
+from panopticon.export.base import BaseExporter
 from panopticon.export.csv_writer import CsvExportWriter
 from panopticon.export.pcap_writer import PcapExportWriter
 from panopticon.pipeline import PipelineWorker
@@ -38,6 +39,19 @@ class RecordingDetector(BaseDetector):
         self.seen.append(event)
         self.raws.append(raw)
         return None
+
+
+class RaisingExporter(BaseExporter):
+    """Simulates a disk-full / broken exporter."""
+
+    def write(self, raw, event):
+        raise OSError("disk full")
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
 
 
 def test_worker_updates_state_store():
@@ -137,3 +151,32 @@ def test_worker_writes_valid_pcap_and_csv(tmp_path):
     assert rows[0]["src"] == "10.0.0.1"
     assert rows[0]["dport"] == "80"
     assert rows[2]["ts"] == "2.0"
+
+
+def test_worker_survives_raising_exporter():
+    q = queue.Queue()
+    store = StateStore()
+    worker = PipelineWorker(q, store, exporters=[RaisingExporter()])
+    worker.start()
+    try:
+        q.put((b"\x00" * 60, ev(0.0)))
+        assert wait_until(lambda: worker.error_count >= 1)
+        assert worker.is_alive()
+        # The worker is still alive and keeps processing the queue.
+        q.put((b"\x00" * 60, ev(1.0)))
+        assert wait_until(lambda: worker.error_count >= 2)
+        assert store.snapshot_telemetry()["total_packets"] >= 2
+        assert worker.last_error == "OSError: disk full"
+    finally:
+        worker.stop()
+        worker.join(timeout=2)
+
+
+def test_drain_contains_exporter_errors():
+    q = queue.Queue()
+    for i in range(3):
+        q.put((b"\x00" * 60, ev(float(i))))
+    worker = PipelineWorker(q, StateStore(), exporters=[RaisingExporter()])
+    assert worker.drain() == 3
+    assert worker.error_count == 3
+    assert q.empty()

@@ -27,6 +27,11 @@ def test_below_threshold_no_alert():
     assert detector.process_event(ev(1.0, 49151), 1.0) is None
 
 
+def test_boundary_exactly_threshold_alerts():
+    detector = HighPortDetector(threshold_port=49152)
+    assert detector.process_event(ev(1.0, 49152), 1.0) is not None
+
+
 def test_non_flow_protocol_ignored():
     detector = HighPortDetector()
     icmp = PacketEvent(1.0, "10.0.0.1", "8.8.8.8", "icmp", 0, 50000, 100, "")

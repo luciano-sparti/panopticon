@@ -17,6 +17,11 @@ from __future__ import annotations
 
 from typing import Optional
 
+from scapy.layers.inet import ICMP, IP, TCP, UDP
+from scapy.layers.inet6 import IPv6
+from scapy.layers.l2 import Ether
+from scapy.packet import Packet
+
 from ..core.event import AlertEvent, PacketEvent
 from .base import BaseDetector
 
@@ -54,21 +59,22 @@ class PlaintextDetector(BaseDetector):
         port_hit = (
             event.dport in PLAINTEXT_PORTS or event.sport in PLAINTEXT_PORTS
         )
-        marker = self._find_marker(raw)
+        marker = self._find_marker(raw, event.proto)
 
         if port_hit and (not self._payload_gate or marker is not None):
-            service = (
-                PLAINTEXT_PORTS.get(event.dport)
-                or PLAINTEXT_PORTS.get(event.sport)
-                or "plaintext"
-            )
-            port = event.dport or event.sport
+            if event.dport in PLAINTEXT_PORTS:
+                port = event.dport
+                direction = "to"
+            else:
+                port = event.sport
+                direction = "from"
+            service = PLAINTEXT_PORTS[port]
             return AlertEvent(
                 time=now,
                 severity="warn",
                 kind="plaintext",
                 summary=(
-                    f"unencrypted {service} traffic on port {port}"
+                    f"unencrypted {service} traffic {direction} port {port}"
                     + (f" ({marker.decode('ascii', 'replace')!r})" if marker else "")
                 ),
                 src=event.src,
@@ -91,12 +97,56 @@ class PlaintextDetector(BaseDetector):
 
         return None
 
-    def _find_marker(self, raw: Optional[bytes]) -> Optional[bytes]:
-        """Return the first cleartext marker found in the payload head."""
+    def _find_marker(self, raw: Optional[bytes], proto: str) -> Optional[bytes]:
+        """Return the first cleartext marker found in the payload head.
+
+        Transport-layer headers are stripped before scanning so scan budget
+        is spent on real payload bytes rather than on binary L2/L3/L4 headers
+        (which can coincidentally contain ``USER `` / ``PASS `` sequences).
+        Frames that cannot be dissected fall back to scanning the raw head.
+        """
         if not raw:
             return None
-        head = raw[: self._max_scan]
+        payload = _payload_bytes(raw) if proto in ("tcp", "udp", "icmp") else None
+        if payload is None:
+            payload = raw
+        head = payload[: self._max_scan]
         for marker in PLAINTEXT_MARKERS:
             if marker in head:
                 return marker
         return None
+
+
+def _payload_bytes(raw: bytes) -> Optional[bytes]:
+    """Return the L4 payload bytes of ``raw``, or ``None`` when no L4 layer.
+
+    ``None`` (rather than empty bytes) lets callers distinguish "dissection
+    reached a transport layer with no payload" from "the frame could not be
+    dissected at all".
+    """
+    pkt = _dissect(raw)
+    if pkt is None:
+        return None
+    for layer_cls in (TCP, UDP, ICMP):
+        layer = pkt.getlayer(layer_cls)
+        if layer is not None:
+            return bytes(layer.payload)
+    return None
+
+
+def _dissect(raw: bytes) -> Optional[Packet]:
+    """Best-effort dissection of a raw frame down to a transport layer."""
+    if not raw:
+        return None
+    for cls in (Ether, IP, IPv6):
+        try:
+            pkt = cls(raw)
+        except Exception:  # noqa: BLE001 - corrupt/truncated frames
+            continue
+        if (
+            pkt.getlayer(TCP) is not None
+            or pkt.getlayer(UDP) is not None
+            or pkt.getlayer(ICMP) is not None
+        ):
+            return pkt
+    return None

@@ -3,11 +3,16 @@
 Writes one row per packet event (the full session, not a UI-side snapshot)
 as a ``csv.DictWriter`` and flushes periodically so recent flows land on
 disk even before shutdown.
+
+The file is opened in append mode (matching the PCAP exporter); the header
+row is only written when the file is new or empty so consecutive runs keep
+one header. Flush cadence defaults to every 100 rows.
 """
 
 from __future__ import annotations
 
 import csv
+import os
 from typing import Dict, List
 
 from .base import BaseExporter
@@ -29,14 +34,16 @@ DEFAULT_FLUSH_EVERY = 100
 
 
 class CsvExportWriter(BaseExporter):
-    """Row stream to ``path`` with periodic flushes."""
+    """Append-mode row stream to ``path`` with periodic flushes."""
 
     def __init__(self, path: str, flush_every: int = DEFAULT_FLUSH_EVERY) -> None:
         self._path = path
         self._flush_every = flush_every
-        self._fh = open(path, "w", newline="", encoding="utf-8")
+        is_new = not os.path.exists(path) or os.path.getsize(path) == 0
+        self._fh = open(path, "a", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._fh, fieldnames=CSV_FIELDNAMES)
-        self._writer.writeheader()
+        if is_new:
+            self._writer.writeheader()
         self._count = 0
 
     def write(self, raw: bytes, event) -> None:

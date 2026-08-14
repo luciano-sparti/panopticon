@@ -90,6 +90,17 @@ def test_prune_expires_stale_entries():
     assert detector.prune(now=100.0) == 0
 
 
+def test_source_cap_evicts_oldest_source():
+    detector = SynScanDetector(threshold=20, max_sources=2)
+    detector.process_event(syn(0.0, 0, src="10.0.0.1"), 0.0)
+    detector.process_event(syn(0.0, 0, src="10.0.0.2"), 0.0)
+    detector.process_event(syn(0.0, 0, src="10.0.0.3"), 0.0)
+    # Cap is 2, so the least-recently-seen source (10.0.0.1) is evicted.
+    assert len(detector._pending) == 2
+    assert "10.0.0.1" not in detector._pending
+    assert set(detector._pending) == {"10.0.0.2", "10.0.0.3"}
+
+
 def test_engine_enforces_per_source_cooldown():
     store = StateStore()
     engine = DetectorEngine(

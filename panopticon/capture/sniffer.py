@@ -37,6 +37,11 @@ _PSEUDO_PREFIXES = (
     "bluetooth",
     "tap",
     "tun",
+    "utun",
+    "vmnet",
+    "vboxnet",
+    "ppp",
+    "wg",
 )
 
 
@@ -137,13 +142,19 @@ def handle_packet(
     """Parse ``pkt`` and enqueue ``(raw_bytes, event)`` non-blocking.
 
     On a full queue the frame is counted as dropped instead of stalling
-    capture.
+    capture. Any parse/serialization failure is contained here so one bad
+    frame cannot kill the capture thread; the frame is counted as dropped.
     """
     if pkt is None:
         return
-    event = parse(pkt)
     try:
-        packet_queue.put_nowait((bytes(pkt), event))
+        event = parse(pkt)
+        raw = bytes(pkt)
+    except Exception:  # noqa: BLE001 - one bad frame must not stop capture
+        store.increment_dropped()
+        return
+    try:
+        packet_queue.put_nowait((raw, event))
     except queue.Full:
         store.increment_dropped()
 
@@ -186,7 +197,27 @@ class Sniffer:
 
     @property
     def running(self) -> bool:
-        return self._thread.is_alive()
+        return bool(self._sniffer.running)
+
+    @property
+    def exception(self) -> Optional[BaseException]:
+        """Capture-thread exception, or ``None`` while capture is healthy.
+
+        Scapy's ``AsyncSniffer`` swallows capture errors into this attribute
+        (bad BPF filter, permission change, removed interface, ...); it is the
+        authoritative signal that capture has failed.
+        """
+        return self._sniffer.exception
+
+    @property
+    def capture_failed(self) -> bool:
+        """True once the capture loop has ended or raised an error."""
+        if self._sniffer.exception is not None:
+            return True
+        thread = self._sniffer.thread
+        if thread is None:
+            return False  # the internal sniffer has not been started yet
+        return not thread.is_alive() and not self._sniffer.running
 
     def start(self) -> None:
         self._thread.start()

@@ -1,7 +1,11 @@
 """Capture module tests without live sniffing or root privileges."""
 
+import os
 import queue
+import time
 
+import pytest
+from scapy.arch import get_if_list
 from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether
 from scapy.packet import Raw
@@ -88,3 +92,70 @@ def test_sniffer_construction_is_lazy():
     assert sniffer.interface == "lo"
     assert not sniffer.running
     sniffer.stop()
+
+
+def wait_until(cond, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return cond()
+
+
+def test_auto_detect_skips_pseudo_and_loopback(monkeypatch):
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer.get_if_list",
+        lambda: ["lo", "docker0", "utun0", "vmnet1", "vboxnet0", "wg0", "eth0"],
+    )
+    assert auto_detect_interface() == "eth0"
+
+
+def test_auto_detect_falls_back_to_first_when_all_pseudo(monkeypatch):
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer.get_if_list",
+        lambda: ["lo", "ppp0", "tap0"],
+    )
+    assert auto_detect_interface() == "lo"
+
+
+def test_sniffer_running_mirrors_underlying_state():
+    if not get_if_list():
+        pytest.skip("no network interfaces to attempt capture on")
+    q = queue.Queue()
+    sniffer = Sniffer("lo", q, StateStore())
+    sniffer.start()
+    try:
+        # Wait until the underlying AsyncSniffer has either started
+        # capturing or failed (e.g. no root privileges).
+        assert wait_until(
+            lambda: sniffer._sniffer.running
+            or sniffer._sniffer.exception is not None
+        )
+        # The liveness probe must reflect the underlying sniffer, not the
+        # short-lived wrapper thread.
+        assert sniffer.running == bool(sniffer._sniffer.running)
+        if sniffer._sniffer.exception is not None:
+            assert sniffer.capture_failed
+    finally:
+        sniffer.stop()
+        sniffer.join(timeout=2)
+
+
+def test_sniffer_failure_surfaces_exception():
+    if not get_if_list():
+        pytest.skip("no network interfaces to attempt capture on")
+    if os.geteuid() == 0:
+        pytest.skip("running as root; cannot force a capture permission error")
+    q = queue.Queue()
+    sniffer = Sniffer("lo", q, StateStore())
+    sniffer.start()
+    try:
+        # scapy 2.7 leaves AsyncSniffer.running stuck True and records the
+        # failure in .exception; the exception is the authoritative probe.
+        assert wait_until(lambda: sniffer._sniffer.exception is not None)
+        assert sniffer.exception is sniffer._sniffer.exception
+        assert sniffer.capture_failed
+    finally:
+        sniffer.stop()
+        sniffer.join(timeout=2)

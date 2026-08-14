@@ -57,6 +57,38 @@ def test_pcap_writer_flushes_on_byte_threshold(tmp_path):
     writer.close()
 
 
+def test_pcap_writer_appends_across_runs(tmp_path):
+    path = tmp_path / "out.pcap"
+    w1 = PcapExportWriter(str(path))
+    w1.write(frame(), ev(0.0))
+    w1.close()
+    w2 = PcapExportWriter(str(path))
+    w2.write(frame(), ev(1.0))
+    w2.close()
+    pkts = rdpcap(str(path))
+    assert len(pkts) == 2
+
+
+def test_pcap_writer_infers_linktype_from_raw_ip_frame(tmp_path):
+    path = tmp_path / "raw.pcap"
+    p = IP(src="1.2.3.4", dst="5.6.7.8") / TCP(sport=1, dport=80)
+    p.time = 100.0
+    writer = PcapExportWriter(str(path))
+    writer.write(bytes(p), ev(0.0))
+    writer.close()
+    pkts = rdpcap(str(path))
+    assert len(pkts) == 1
+    assert pkts[0].haslayer(IP)
+
+
+def test_pcap_writer_respects_explicit_linktype(tmp_path):
+    path = tmp_path / "out.pcap"
+    writer = PcapExportWriter(str(path), linktype=1)
+    writer.write(frame(), ev(0.0))
+    writer.close()
+    assert len(rdpcap(str(path))) == 1
+
+
 def test_csv_writer_writes_header_and_rows(tmp_path):
     path = tmp_path / "out.csv"
     writer = CsvExportWriter(str(path))
@@ -83,3 +115,27 @@ def test_csv_writer_flushes_on_row_threshold(tmp_path):
         writer.write(frame(), ev(float(i)))
     assert writer._count == 0
     writer.close()
+
+
+def test_csv_writer_appends_across_runs(tmp_path):
+    path = tmp_path / "out.csv"
+    w1 = CsvExportWriter(str(path))
+    w1.write(frame(), ev(0.0))
+    w1.close()
+    w2 = CsvExportWriter(str(path))
+    w2.write(frame(), ev(1.0))
+    w2.close()
+    with open(path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 2
+    assert rows[0]["ts"] == "0.0"
+    assert rows[1]["ts"] == "1.0"
+
+
+def test_csv_writer_writes_single_header_on_new_file(tmp_path):
+    path = tmp_path / "out.csv"
+    w = CsvExportWriter(str(path))
+    w.close()
+    with open(path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert len(rows) == 0
