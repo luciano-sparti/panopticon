@@ -7,9 +7,9 @@ __pycache__/
 venv/
 env/
 
-# OS / editor
-.DS_Store
-*.swp
-
 # smoke-test scratch output
 _smoke_export_out/
+
+# live-capture export outputs (default session.pcap / session.csv)
+session.pcap
+session.csv

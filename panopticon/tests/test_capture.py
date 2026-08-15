@@ -103,11 +103,24 @@ def wait_until(cond, timeout=5.0):
     return cond()
 
 
+def _fake_sys_ifaces(monkeypatch, operstate=None, address=None):
+    """Fake the sysfs reads so auto-detection needs no real network."""
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer._iface_operstate",
+        lambda name: (operstate or {}).get(name, "unknown"),
+    )
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer._iface_has_address",
+        lambda name: (address or {}).get(name, False),
+    )
+
+
 def test_auto_detect_skips_pseudo_and_loopback(monkeypatch):
     monkeypatch.setattr(
         "panopticon.capture.sniffer.get_if_list",
         lambda: ["lo", "docker0", "utun0", "vmnet1", "vboxnet0", "wg0", "eth0"],
     )
+    _fake_sys_ifaces(monkeypatch, operstate={"eth0": "up"}, address={"eth0": True})
     assert auto_detect_interface() == "eth0"
 
 
@@ -116,7 +129,81 @@ def test_auto_detect_falls_back_to_first_when_all_pseudo(monkeypatch):
         "panopticon.capture.sniffer.get_if_list",
         lambda: ["lo", "ppp0", "tap0"],
     )
-    assert auto_detect_interface() == "lo"
+    _fake_sys_ifaces(monkeypatch)
+    assert auto_detect_interface() == ""
+
+
+def test_auto_detect_prefers_up_addressed_over_down(monkeypatch):
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer.get_if_list",
+        lambda: ["eno1", "wlp6s0"],
+    )
+    _fake_sys_ifaces(
+        monkeypatch,
+        operstate={"eno1": "down", "wlp6s0": "up"},
+        address={"eno1": True, "wlp6s0": True},
+    )
+    assert auto_detect_interface() == "wlp6s0"
+
+
+def test_auto_detect_prefers_up_addressed_over_up_only(monkeypatch):
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer.get_if_list",
+        lambda: ["eth0", "wlan0"],
+    )
+    _fake_sys_ifaces(
+        monkeypatch,
+        operstate={"eth0": "up", "wlan0": "up"},
+        address={"eth0": False, "wlan0": True},
+    )
+    assert auto_detect_interface() == "wlan0"
+
+
+def test_auto_detect_prefers_up_over_down_without_address(monkeypatch):
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer.get_if_list",
+        lambda: ["eno1", "wlan0"],
+    )
+    _fake_sys_ifaces(
+        monkeypatch,
+        operstate={"eno1": "down", "wlan0": "up"},
+        address={"eno1": False, "wlan0": False},
+    )
+    assert auto_detect_interface() == "wlan0"
+
+
+def test_auto_detect_falls_back_to_any_non_pseudo_when_none_up(monkeypatch):
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer.get_if_list",
+        lambda: ["lo", "eno1", "wlan0"],
+    )
+    _fake_sys_ifaces(
+        monkeypatch,
+        operstate={"eno1": "down", "wlan0": "unknown"},
+        address={"eno1": False, "wlan0": False},
+    )
+    assert auto_detect_interface() == "eno1"
+
+
+def test_auto_detect_excludes_pseudo_even_when_up_addressed(monkeypatch):
+    monkeypatch.setattr(
+        "panopticon.capture.sniffer.get_if_list",
+        lambda: ["lo", "docker0", "wg0"],
+    )
+    _fake_sys_ifaces(
+        monkeypatch,
+        operstate={"lo": "up", "docker0": "up", "wg0": "up"},
+        address={"lo": True, "docker0": True, "wg0": True},
+    )
+    assert auto_detect_interface() == ""
+
+
+def test_auto_detect_returns_empty_when_enumeration_fails(monkeypatch):
+    def _boom():
+        raise RuntimeError("no libpcap")
+
+    monkeypatch.setattr("panopticon.capture.sniffer.get_if_list", _boom)
+    assert auto_detect_interface() == ""
 
 
 def test_sniffer_running_mirrors_underlying_state():

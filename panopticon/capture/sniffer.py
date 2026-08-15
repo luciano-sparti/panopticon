@@ -118,16 +118,62 @@ def _is_pseudo_interface(name: str) -> bool:
     return any(name.startswith(prefix) for prefix in _PSEUDO_PREFIXES)
 
 
+# sysfs is the dependency-free source for per-interface link state.
+_SYS_CLASS_NET = "/sys/class/net"
+
+
+def _read_sys_iface_field(name: str, field: str) -> str:
+    """Read a trimmed ``/sys/class/net/<name>/<field>`` value, or ``""``."""
+    try:
+        with open(
+            os.path.join(_SYS_CLASS_NET, name, field),
+            "r",
+            encoding="utf-8",
+        ) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _iface_operstate(name: str) -> str:
+    """Link-operational state of ``name`` from sysfs (e.g. ``"up"``)."""
+    return _read_sys_iface_field(name, "operstate")
+
+
+def _iface_has_address(name: str) -> bool:
+    """True when the interface carries a non-zero assigned MAC address."""
+    addr = _read_sys_iface_field(name, "address")
+    return bool(addr) and addr != "00:00:00:00:00:00"
+
+
+def _select_interface(names: list) -> str:
+    """Rank candidate interfaces: up+addressed > up > any non-pseudo."""
+    up_addressed: list = []
+    up: list = []
+    for name in names:
+        if _is_pseudo_interface(name):
+            continue
+        if _iface_operstate(name) in {"up", "lower_up"}:
+            if _iface_has_address(name):
+                up_addressed.append(name)
+            up.append(name)
+    if up_addressed:
+        return up_addressed[0]
+    if up:
+        return up[0]
+    for name in names:
+        if not _is_pseudo_interface(name):
+            return name
+    return ""
+
+
 def auto_detect_interface() -> str:
     """Pick the first usable non-loopback interface, else ``""``."""
     try:
         ifaces = get_if_list()
     except Exception:
         return ""
-    for name in ifaces:
-        if not _is_pseudo_interface(name):
-            return name
-    return ifaces[0] if ifaces else ""
+    return _select_interface(ifaces)
 
 
 # ----------------------------------------------------------------------
