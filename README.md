@@ -8,8 +8,7 @@
 
 ## Current Status
 
-- ✅ **Phase 1, 2 & 3 Complete** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, and threat detection engine (SYN-scan, plaintext, and high-port heuristics) implemented with **107 unit/integration tests passing**.
-- ⏳ **Phase 4 & Phase 5 Pending** — Rich terminal interactive UI dashboard (Phase 4), and rule configuration & advanced threat analytics (Phase 5).
+- ✅ **Phases 1–5 Complete** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, threat detection engine (SYN-scan, plaintext, and high-port heuristics), Rich terminal interactive dashboard with selector/pin/tag/kill, and automatic `self:` tagging — **185 unit/integration tests passing**.
 
 ---
 
@@ -18,6 +17,8 @@
 - **Live Asynchronous Packet Capture**: Employs Scapy's `AsyncSniffer` in a dedicated background thread with non-blocking queueing to prevent packet drops during high throughput.
 - **Protocol & Metadata Parsing**: Extracts timestamp, source/destination IPs, layer 4 protocols (TCP/UDP/ICMP), service ports, and packet lengths into normalized `PacketEvent` structures.
 - **State Tracking & Telemetry**: Maintains rolling traffic metrics, protocol distribution percentages, top talker IP statistics, and dropped frame counts via `StateStore`.
+- **IP Tagging**: Tag any talker manually (`t`/`T`) or automatically — the host's own IPs are resolved from the kernel (`/proc`/sysfs) at startup and any packet touching an owned IP gets a `self:<hostname>` tag (loopback gets `self:localhost`). Tags survive talker eviction and can be persisted with `--tags-file`.
+- **Interactive Dashboard**: A persistent key-legend footer drives a non-blocking selector (↑/↓), pin-to-top (`p`), inline tag prompts (`t`/`T`), scoped kill (`k`, behind `--enable-kill`), and help (`?`).
 - **Dual Streaming Exporters**: Concurrently writes raw frames to `.pcap` (via Scapy `PcapWriter`, append mode, linktype auto-inferred from the first frame) and flow statistics to `.csv` (append mode, header written once) for forensic analysis in Wireshark or analytical tools.
 - **Clean Pipeline & Shutdown**: Signal-aware worker pipeline (handling `SIGINT`/`SIGTERM` / `CTRL-C`) that gracefully drains in-flight capture queues and flushes disk buffers on exit. The detector engine raises `syn_scan`, `plaintext`, and `high_port` alerts, which are summarized in the shutdown telemetry.
 
@@ -111,6 +112,7 @@ sudo setcap cap_net_raw,cap_net_admin=eip "$(readlink -f "$VIRTUAL_ENV/bin/pytho
 
 | Flag | Short | Description | Default |
 |---|---|---|---|
+| `--version` | | Print the version and exit | |
 | `--interface` | `-i` | Network interface to sniff on | Auto-detected |
 | `--filter` | | BPF (Berkeley Packet Filter) string (e.g. `"tcp or udp"`) | None |
 | `--export-pcap` | | Output path for raw captured packets | `session.pcap` |
@@ -121,6 +123,21 @@ sudo setcap cap_net_raw,cap_net_admin=eip "$(readlink -f "$VIRTUAL_ENV/bin/pytho
 | `--syn-window` | | Sliding window (s) for SYN-scan counting | `5.0` |
 | `--high-port` | | Destination ports at or above this value raise high-port alerts | `49152` |
 | `--alert-cooldown` | | Min seconds between accepted alerts of the same kind/source | `30.0` |
+| `--no-ui` | | Disable the dashboard and keyboard watcher (headless/CI) | Off |
+| `--enable-kill` | | Enable the scoped `k` kill (SIGTERM of the flow's local process, after y/n confirm) | Off |
+| `--tags-file` | | JSON `{ip: [tags]}` path loaded at start and saved on exit | None |
+
+### Interactive Keys
+
+| Key | Action |
+|---|---|
+| `q` / `Ctrl+C` | Quit |
+| `↑` / `↓` (or `j`) | Move the selection across top-talkers |
+| `p` | Pin/unpin the selected talker (kept at the top of the talkers list) |
+| `t` | Inline prompt to add a tag to the selected talker |
+| `T` | Inline prompt to remove a tag from the selected talker |
+| `k` | Kill the local process owning the selected talker's flow (needs `--enable-kill`, then confirm `y`/`n`) |
+| `?` | Show the key legend in the footer |
 
 ### Usage Examples
 
@@ -140,7 +157,27 @@ sudo setcap cap_net_raw,cap_net_admin=eip "$(readlink -f "$VIRTUAL_ENV/bin/pytho
   ```
 
 - **Stopping Capture**:
-  Press **`CTRL-C`** to trigger graceful shutdown. Panopticon closes the sniffer socket, drains remaining queue items through the pipeline, flushes exporters to disk, and prints summary telemetry (including any detector alerts).
+  Press **`CTRL-C`** (or `q`) to trigger graceful shutdown. Panopticon closes the sniffer socket, drains remaining queue items through the pipeline, flushes exporters to disk, saves the tags file (if `--tags-file` given), and prints summary telemetry (including any detector alerts).
+
+### Usage Examples
+
+- **Check the version**:
+  ```bash
+  "$VIRTUAL_ENV/bin/python" -m panopticon.analyzer --version
+  ```
+
+- **Persist manual tags across sessions**:
+  ```bash
+  sudo "$VIRTUAL_ENV/bin/python" -m panopticon.analyzer --tags-file tags.json
+  ```
+
+- **Enable the scoped kill key**:
+  ```bash
+  sudo "$VIRTUAL_ENV/bin/python" -m panopticon.analyzer --enable-kill
+  ```
+  Selecting a talker and pressing `k` resolves the local process owning that
+  flow (via `/proc`) and asks for a `y`/`n` confirmation before sending
+  `SIGTERM`. Kill is always disabled by default and never auto-kills.
 
 ---
 

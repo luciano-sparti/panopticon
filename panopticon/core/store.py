@@ -12,8 +12,9 @@ import copy
 import threading
 import time
 from collections import deque
-from typing import Deque, Dict, List
+from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple
 
+from . import identity
 from .event import AlertEvent, PacketEvent
 
 # Rolling stream buffer length (kept on-screen / in UI).
@@ -40,7 +41,11 @@ PROTOCOLS = ("tcp", "udp", "icmp", "other")
 class StateStore:
     """Thread-safe accumulation of all dashboard state."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        self_ips: Optional[Set[str]] = None,
+        self_host: Optional[str] = None,
+    ) -> None:
         self._lock = threading.RLock()
         self._stream: Deque[PacketEvent] = deque(maxlen=STREAM_MAXLEN)
         self._alerts: Deque[AlertEvent] = deque(maxlen=ALERTS_MAXLEN)
@@ -50,6 +55,19 @@ class StateStore:
         self._total_packets = 0
         self._total_bytes = 0
         self._dropped = 0
+
+        # IP -> tags. Kept separate from ``_top_talkers`` so tags survive
+        # LRU eviction and TTL pruning of a talker's telemetry.
+        self._tags: Dict[str, Set[str]] = {}
+        # Remote IP -> (local_port, remote_port, proto) of the last flow.
+        # Used to resolve the local process for the scoped kill feature.
+        self._flows: Dict[str, Tuple[int, int, str]] = {}
+
+        # Automatic "this machine" tagging (self:<hostname>).
+        self._self_ips = (
+            frozenset(self_ips) if self_ips is not None else frozenset(identity.resolve_owned_ips())
+        )
+        self._self_host = self_host if self_host is not None else identity.hostname()
 
         # EWMA velocity state.
         self._pps = 0.0
@@ -85,6 +103,15 @@ class StateStore:
                 self._proto_counts.get(event.proto, 0) + 1
             )
 
+            if event.src in self._self_ips and event.dst:
+                self._flows[event.dst] = (event.sport, event.dport, event.proto)
+            if event.dst in self._self_ips and event.src:
+                self._flows[event.src] = (event.dport, event.sport, event.proto)
+            if event.src in self._self_ips:
+                self._tag_self(event.src)
+            if event.dst in self._self_ips:
+                self._tag_self(event.dst)
+
             self._update_velocity(ts, event.size)
 
     def update_many(self, events, now: float | None = None) -> None:
@@ -104,17 +131,46 @@ class StateStore:
             self._alerts.append(alert)
             self._alerts_total += 1
 
+    def add_tag(self, ip: str, tag: str) -> None:
+        """Attach ``tag`` to ``ip`` (survives talker eviction/pruning)."""
+        with self._lock:
+            self._tags.setdefault(ip, set()).add(tag)
+
+    def remove_tag(self, ip: str, tag: str) -> None:
+        """Detach ``tag`` from ``ip``; drops the entry when the last tag goes."""
+        with self._lock:
+            tags = self._tags.get(ip)
+            if tags is None:
+                return
+            tags.discard(tag)
+            if not tags:
+                del self._tags[ip]
+
+    def load_tags(self, mapping: Dict[str, Iterable[str]]) -> None:
+        """Bulk-import tags (used by ``--tags-file`` startup loading)."""
+        with self._lock:
+            for ip, tags in mapping.items():
+                for tag in tags:
+                    self._tags.setdefault(ip, set()).add(tag)
+
     def prune(self, now: float | None = None) -> int:
         """Purge talkers inactive for longer than ``TALKER_TTL`` seconds.
 
-        Returns the number of entries removed.
+        Pinned talkers are never pruned so their mini-telemetry line stays
+        visible. Returns the number of entries removed.
         """
         ref = time.time() if now is None else now
         with self._lock:
-            stale = [ip for ip, t in self._top_talkers.items()
-                     if ref - t["last_seen"] > TALKER_TTL]
+            stale = []
+            for ip, talker in self._top_talkers.items():
+                if (
+                    ref - talker["last_seen"] > TALKER_TTL
+                    and "pinned" not in self._tags.get(ip, ())
+                ):
+                    stale.append(ip)
             for ip in stale:
                 del self._top_talkers[ip]
+                self._flows.pop(ip, None)
             return len(stale)
 
     # ------------------------------------------------------------------
@@ -132,9 +188,42 @@ class StateStore:
             return copy.deepcopy(list(self._alerts))
 
     def snapshot_talkers(self) -> Dict[str, Dict]:
-        """Deep-copied top-talker map: {ip: {"pkts", "bytes", "last_seen"}}."""
+        """Deep-copied top-talker map with tags merged in.
+
+        Each entry: ``{"pkts", "bytes", "last_seen", "tags": [...]}``.
+        """
         with self._lock:
-            return copy.deepcopy(self._top_talkers)
+            snap = copy.deepcopy(self._top_talkers)
+            for ip, talker in snap.items():
+                tags = self._tags.get(ip)
+                talker["tags"] = sorted(tags) if tags else []
+            return snap
+
+    def snapshot_tags(self) -> Dict[str, List[str]]:
+        """Deep-copied tag map: ``{ip: [tags]}`` (for ``--tags-file``)."""
+        with self._lock:
+            return {ip: sorted(tags) for ip, tags in self._tags.items()}
+
+    def tags_for(self, ip: str) -> Set[str]:
+        """Deep-copied set of tags currently attached to ``ip``."""
+        with self._lock:
+            return set(self._tags.get(ip, ()))
+
+    def snapshot_flow(self, ip: str) -> Optional[Dict]:
+        """Last known flow for a remote ``ip``, or ``None``.
+
+        Returns ``{"local_port", "remote_port", "proto"}`` where the local
+        side is the host's own socket (used for scoped kill resolution).
+        """
+        with self._lock:
+            flow = self._flows.get(ip)
+            if flow is None:
+                return None
+            return {
+                "local_port": flow[0],
+                "remote_port": flow[1],
+                "proto": flow[2],
+            }
 
     def snapshot_telemetry(self) -> Dict:
         """Deep-copied telemetry summary (velocity, mix, counters)."""
@@ -157,6 +246,14 @@ class StateStore:
     # ------------------------------------------------------------------
     # Internal helpers (callers must hold the lock)
     # ------------------------------------------------------------------
+
+    def _tag_self(self, ip: str) -> None:
+        """Attach the automatic ``self:<hostname>`` tag for an owned IP."""
+        if ip in identity.LOOPBACK_IPS or ip.startswith("127."):
+            tag = "self:localhost"
+        else:
+            tag = f"self:{self._self_host}"
+        self._tags.setdefault(ip, set()).add(tag)
 
     def _update_velocity(self, ts: float, size: int) -> None:
         if self._velocity_init:

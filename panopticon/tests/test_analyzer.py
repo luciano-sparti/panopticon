@@ -5,10 +5,12 @@ components writing into tmp paths, covering exit codes, graceful shutdown,
 signal handling, and shutdown telemetry.
 """
 
+import json
 import signal
 
-from panopticon.analyzer import main
+from panopticon.analyzer import _load_tags, _save_tags, build_parser, main
 from panopticon.core.event import PacketEvent
+from panopticon.core.store import StateStore
 
 
 class FakeAsyncSniffer:
@@ -113,3 +115,61 @@ def test_main_signal_sets_shutdown_and_returns_zero(monkeypatch, tmp_path):
 
     monkeypatch.setattr("panopticon.analyzer.Sniffer", SigSniffer)
     assert main(make_args(tmp_path)) == 0
+
+
+def test_version_flag_prints_version_and_exits_zero(capsys):
+    try:
+        main(["--version"])
+    except SystemExit as exc:
+        assert exc.code == 0
+    out, _ = capsys.readouterr()
+    assert "panopticon 0.5.0" in out
+
+
+def test_new_flags_parse():
+    parser = build_parser()
+    args = parser.parse_args(["--enable-kill", "--tags-file", "/tmp/t.json"])
+    assert args.enable_kill is True
+    assert args.tags_file == "/tmp/t.json"
+    defaults = parser.parse_args([])
+    assert defaults.enable_kill is False
+    assert defaults.tags_file == ""
+
+
+def test_tags_file_roundtrip_load_and_save(tmp_path):
+    path = tmp_path / "tags.json"
+    path.write_text('{"1.1.1.1": ["web", "web"], "2.2.2.2": ["x"]}',
+                    encoding="utf-8")
+    store = StateStore()
+    _load_tags(store, str(path))
+    assert store.tags_for("1.1.1.1") == {"web"}
+    assert store.tags_for("2.2.2.2") == {"x"}
+
+    store.add_tag("3.3.3.3", "extra")
+    _save_tags(store, str(path))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["1.1.1.1"] == ["web"]
+    assert data["3.3.3.3"] == ["extra"]
+
+
+def test_tags_file_ignores_bad_load(tmp_path):
+    path = tmp_path / "tags.json"
+    path.write_text("not json {", encoding="utf-8")
+    store = StateStore()
+    _load_tags(store, str(path))  # must not raise
+    assert store.snapshot_tags() == {}
+
+
+def test_main_writes_tags_file_on_exit(monkeypatch, tmp_path):
+    patch_healthy(monkeypatch)
+    tags = tmp_path / "tags.json"
+    assert main(make_args(tmp_path, ["--tags-file", str(tags)])) == 0
+    assert isinstance(json.loads(tags.read_text(encoding="utf-8")), dict)
+
+
+def test_main_no_ui_headless_path(monkeypatch, tmp_path, capsys):
+    patch_healthy(monkeypatch)
+    assert main(make_args(tmp_path, ["--no-ui"])) == 0
+    out, err = capsys.readouterr()
+    assert "capturing on eth0" in out
+    assert "1 packets" in out

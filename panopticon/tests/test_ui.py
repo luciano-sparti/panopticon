@@ -7,6 +7,7 @@ raise, and never block on ``input()``.
 
 import io
 import os
+import signal as sig
 import threading
 import time
 
@@ -19,14 +20,18 @@ from panopticon.core.event import AlertEvent, PacketEvent
 from panopticon.core.store import StateStore
 from panopticon.ui import (
     KeyboardWatcher,
+    UIControls,
     build_dashboard,
     build_layout,
+    legend_text,
     render_alerts,
     render_stream_table,
     render_telemetry,
     render_top_talkers,
 )
-from panopticon.ui.tables import SEVERITY_STYLES
+from panopticon.ui.dashboard import render_footer
+from panopticon.ui.keys import PINNED_TAG
+from panopticon.ui.tables import SEVERITY_STYLES, rank_talkers
 
 
 def ev(ts, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
@@ -184,6 +189,274 @@ def test_keyboard_stop_before_q_is_clean():
     watcher.stop()  # must not raise even with a live fd
     os.close(read_fd)
     os.close(write_fd)
+
+
+def test_keyboard_forwards_keys_to_on_key():
+    read_fd, write_fd = os.pipe()
+    seen = []
+    stop = threading.Event()
+    watcher = KeyboardWatcher(
+        stop,
+        stdin=_FakeStdin(read_fd),
+        poll_interval=0.01,
+        on_key=seen.append,
+    ).start()
+    try:
+        os.write(write_fd, b"pt")
+        deadline = time.monotonic() + 2.0
+        while not seen and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert b"".join(seen) == b"pt"
+        assert not stop.is_set()  # p/t are not quit keys
+    finally:
+        watcher.stop()
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+def test_keyboard_handler_error_does_not_kill_watcher():
+    def _boom(_data):
+        raise RuntimeError("handler bug")
+
+    read_fd, write_fd = os.pipe()
+    stop = threading.Event()
+    watcher = KeyboardWatcher(
+        stop,
+        stdin=_FakeStdin(read_fd),
+        poll_interval=0.01,
+        on_key=_boom,
+    ).start()
+    try:
+        os.write(write_fd, b"abc")
+        assert not stop.wait(timeout=0.5)
+    finally:
+        watcher.stop()
+        os.close(read_fd)
+        os.close(write_fd)
+
+
+# ----------------------------------------------------------------------
+# Phase 5: legend footer, selector, pin, tag, kill
+# ----------------------------------------------------------------------
+
+
+def _talker_store():
+    store = StateStore()
+    for i in range(5):
+        store.update(ev(float(i), src=f"10.0.0.{i + 1}", size=100 + i * 10))
+    return store
+
+
+def test_legend_text_shows_kill_only_when_enabled():
+    assert "k kill" not in legend_text(False)
+    assert "k kill" in legend_text(True)
+    for key in ("q quit", "↑/↓ select", "p pin", "t tag", "T untag", "? help"):
+        assert key in legend_text(False)
+
+
+def test_render_footer_renders_legend_and_prompt():
+    assert "q quit" in render_text(render_footer(""))
+    assert "tag 10.0.0.1: web" in render_text(render_footer("tag 10.0.0.1: web"))
+
+
+def test_build_layout_has_footer_region():
+    layout = build_layout(_talker_store())
+    assert layout["footer"] is not None
+
+
+def test_layout_footer_reflects_controls_prompt():
+    store = _talker_store()
+    controls = UIControls(store)
+    controls.selected_ip = "10.0.0.1"
+    controls.prompt = {"kind": "add", "ip": "10.0.0.1", "buffer": "web"}
+    text = render_text(build_layout(store, controls=controls))
+    assert "tag 10.0.0.1: web" in text
+
+
+def test_rank_talkers_pins_first_then_bytes():
+    talkers = {
+        "small": {"pkts": 1, "bytes": 10, "tags": []},
+        "big": {"pkts": 2, "bytes": 100, "tags": []},
+        "pin": {"pkts": 3, "bytes": 50, "tags": ["pinned"]},
+    }
+    assert [ip for ip, _ in rank_talkers(talkers)] == ["pin", "big", "small"]
+
+
+def test_pinned_talker_renders_first_with_caption():
+    store = StateStore()
+    for i in range(3):
+        store.update(ev(0.0, src=f"ip{i}", size=100 * (i + 1)))
+    store.add_tag("ip0", PINNED_TAG)
+    table = render_top_talkers(store.snapshot_talkers())
+    text = render_text(table)
+    assert text.index("ip0") < text.index("ip2")
+    assert "Pinned: ip0" in text
+    assert "pinned" in text
+
+
+def test_selected_talker_is_highlighted():
+    store = StateStore()
+    store.update(ev(0.0, src="ip0", size=100))
+    table = render_top_talkers(store.snapshot_talkers(), selected="ip0")
+    assert "▸ ip0" in render_text(table)
+
+
+def test_selector_moves_on_arrow_keys():
+    controls = UIControls(_talker_store())
+    controls.feed(b"\x1b[B")
+    assert controls.selected_ip == "10.0.0.5"
+    controls.feed(b"\x1b[B")
+    assert controls.selected_ip == "10.0.0.4"
+    controls.feed(b"\x1b[A")
+    assert controls.selected_ip == "10.0.0.5"
+
+
+def test_selector_moves_on_j():
+    controls = UIControls(_talker_store())
+    controls.feed(b"j")
+    assert controls.selected_ip == "10.0.0.5"
+
+
+def test_selector_clamps_at_edges():
+    controls = UIControls(_talker_store())
+    for _ in range(10):
+        controls.feed(b"\x1b[B")
+    assert controls.selected_ip == "10.0.0.1"
+    for _ in range(10):
+        controls.feed(b"\x1b[A")
+    assert controls.selected_ip == "10.0.0.5"
+
+
+def test_selector_with_empty_store_is_safe():
+    controls = UIControls(StateStore())
+    controls.feed(b"\x1b[B")
+    assert controls.selected_ip is None
+
+
+def test_pin_toggles_tag_on_selected():
+    store = _talker_store()
+    controls = UIControls(store)
+    controls.feed(b"\x1b[B")
+    controls.feed(b"p")
+    assert "pinned" in store.tags_for("10.0.0.5")
+    controls.feed(b"p")
+    assert "pinned" not in store.tags_for("10.0.0.5")
+
+
+def test_pin_without_selection_shows_status():
+    controls = UIControls(StateStore())
+    controls.feed(b"p")
+    assert "no talker selected" in controls.status
+
+
+def test_t_adds_tag_via_inline_prompt():
+    store = _talker_store()
+    controls = UIControls(store)
+    controls.feed(b"\x1b[B")
+    controls.feed(b"t")
+    assert controls.prompt is not None
+    for ch in b"web-server":
+        controls.feed(bytes([ch]))
+    assert controls.prompt_text == "tag 10.0.0.5: web-server▏"
+    controls.feed(b"\r")
+    assert controls.prompt is None
+    assert "web-server" in store.tags_for("10.0.0.5")
+
+
+def test_t_prompt_backspace_edits_buffer():
+    store = _talker_store()
+    controls = UIControls(store)
+    controls.feed(b"\x1b[B")
+    controls.feed(b"t")
+    for ch in b"abcd":
+        controls.feed(bytes([ch]))
+    controls.feed(b"\x7f")
+    controls.feed(b"\r")
+    assert "abc" in store.tags_for("10.0.0.5")
+
+
+def test_T_removes_tag_via_inline_prompt():
+    store = _talker_store()
+    store.add_tag("10.0.0.5", "manual")
+    controls = UIControls(store)
+    controls.feed(b"\x1b[B")
+    controls.feed(b"T")
+    for ch in b"manual":
+        controls.feed(bytes([ch]))
+    controls.feed(b"\r")
+    assert "manual" not in store.tags_for("10.0.0.5")
+
+
+def test_t_without_selection_shows_status():
+    controls = UIControls(StateStore())
+    controls.feed(b"t")
+    assert "no talker selected" in controls.status
+    assert controls.prompt is None
+
+
+def test_k_is_noop_without_enable_kill():
+    store = _talker_store()
+    controls = UIControls(store, enable_kill=False)
+    controls.feed(b"\x1b[B")
+    controls.feed(b"k")
+    assert controls.prompt is None
+    assert "kill disabled" in controls.status
+
+
+def test_k_without_known_flow_shows_status():
+    store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
+    store.update(ev(0.0, src="10.0.0.2", dst="10.0.0.5"), now=0.0)
+    controls = UIControls(store, enable_kill=True,
+                          kill_resolver=lambda ip, port: [1])
+    controls.feed(b"\x1b[B")
+    controls.feed(b"k")
+    assert controls.prompt is None
+    assert "no known flow" in controls.status
+
+
+def test_k_confirms_and_signals_selected_flow(monkeypatch):
+    store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
+    store.update(ev(0.0, src="10.0.0.1", dst="10.0.0.5",
+                    sport=40000, dport=8080, size=100), now=0.0)
+    store.update(ev(1.0, src="10.0.0.5", dst="10.0.0.1",
+                    sport=8080, dport=40000, size=200), now=1.0)
+    sent = []
+    monkeypatch.setattr("panopticon.ui.keys.os.kill",
+                        lambda pid, _sig: sent.append(pid))
+    controls = UIControls(store, enable_kill=True,
+                          kill_resolver=lambda ip, port: [123, 456])
+    controls.feed(b"\x1b[B")
+    controls.feed(b"k")
+    assert controls.prompt["kind"] == "confirm"
+    assert "kill 10.0.0.5 via local port 40000" in controls.prompt_text
+    controls.feed(b"y")
+    assert controls.prompt is None
+    assert sent == [123, 456]
+    assert "SIGTERM" in controls.status
+
+
+def test_k_confirm_n_aborts(monkeypatch):
+    store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
+    store.update(ev(0.0, src="10.0.0.1", dst="10.0.0.5",
+                    sport=40000, dport=8080, size=100), now=0.0)
+    store.update(ev(1.0, src="10.0.0.5", dst="10.0.0.1",
+                    sport=8080, dport=40000, size=200), now=1.0)
+    sent = []
+    monkeypatch.setattr("panopticon.ui.keys.os.kill",
+                        lambda pid, _sig: sent.append(pid))
+    controls = UIControls(store, enable_kill=True,
+                          kill_resolver=lambda ip, port: [123])
+    controls.feed(b"\x1b[B")
+    controls.feed(b"k")
+    controls.feed(b"n")
+    assert controls.prompt is None
+    assert sent == []
+
+
+def test_help_key_shows_legend_status():
+    controls = UIControls(_talker_store())
+    controls.feed(b"?")
+    assert "q quit" in controls.status
 
 
 # ----------------------------------------------------------------------

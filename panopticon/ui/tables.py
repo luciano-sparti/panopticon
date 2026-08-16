@@ -9,7 +9,7 @@ safe to call from the UI refresh thread at any cadence.
 from __future__ import annotations
 
 import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from rich.table import Table
 from rich.text import Text
@@ -82,14 +82,32 @@ def render_stream_table(events: List[PacketEvent]) -> Table:
     return table
 
 
+def rank_talkers(talkers: Dict[str, Dict], metric: str = "bytes") -> List:
+    """Order ``(ip, stats)`` pairs: pinned talkers first, then metric desc.
+
+    Shared by the renderer and the selector/key handler so both operate on
+    the exact same ordering.
+    """
+    def sort_key(item):
+        ip, stats = item
+        tags = stats.get("tags", ()) or ()
+        pinned = 0 if "pinned" in tags else 1
+        return (pinned, -stats.get(metric, 0))
+
+    return sorted(talkers.items(), key=sort_key)
+
+
 def render_top_talkers(
     talkers: Dict[str, Dict],
     top_n: int = DEFAULT_TOP_TALKERS,
     metric: str = "bytes",
+    selected: Optional[str] = None,
 ) -> Table:
     """Render the busiest hosts with ASCII block activity bars.
 
     ``talkers`` is the deep copy returned by ``StateStore.snapshot_talkers``.
+    Pinned talkers sort to the top (with a mini-telemetry caption) and the
+    currently selected host is highlighted.
     """
     table = Table(
         title=f"Top {top_n} Talkers ({metric})",
@@ -101,22 +119,34 @@ def render_top_talkers(
     table.add_column("Packets", justify="right")
     table.add_column("Bytes", justify="right")
     table.add_column("Activity", justify="left")
+    table.add_column("Tags", no_wrap=True)
 
-    ranked = sorted(
-        talkers.items(),
-        key=lambda item: item[1].get(metric, 0),
-        reverse=True,
-    )[:top_n]
+    ranked = rank_talkers(talkers, metric)[:top_n]
     maximum = max((stats.get(metric, 0) for _, stats in ranked), default=0)
+    pinned_lines = []
     for ip, stats in ranked:
+        tags = stats.get("tags", ()) or ()
+        if ip == selected:
+            host = Text(f"▸ {ip}", style="bold reverse yellow")
+        elif "pinned" in tags:
+            host = Text(f"● {ip}", style="bold yellow")
+        else:
+            host = Text(ip)
         table.add_row(
-            ip,
+            host,
             f"{stats.get('pkts', 0):,}",
             f"{stats.get('bytes', 0):,}",
             _bar(stats.get(metric, 0), maximum),
+            ", ".join(tags) if tags else "",
         )
+        if "pinned" in tags:
+            pinned_lines.append(
+                f"{ip} — {stats.get('pkts', 0):,} pkts · {stats.get('bytes', 0):,} B"
+            )
+    if pinned_lines:
+        table.caption = "\n".join(f"Pinned: {line}" for line in pinned_lines)
     if not ranked:
-        table.add_row("—", "0", "0", " " * BAR_WIDTH)
+        table.add_row("—", "0", "0", " " * BAR_WIDTH, "")
     return table
 
 

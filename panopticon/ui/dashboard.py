@@ -15,9 +15,11 @@ from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
+from rich.text import Text
 
 from panopticon.core.store import StateStore
 
+from .keys import UIControls, legend_text
 from .tables import (
     DEFAULT_TOP_TALKERS,
     render_alerts,
@@ -29,16 +31,27 @@ from .tables import (
 DEFAULT_REFRESH_PER_SECOND = 1.0
 
 
-def build_layout(store: StateStore, top_n: int = DEFAULT_TOP_TALKERS) -> Layout:
+def render_footer(text: str) -> Text:
+    """The persistent key-legend / inline-prompt footer line."""
+    return Text(text or legend_text(), style="bold cyan")
+
+
+def build_layout(
+    store: StateStore,
+    top_n: int = DEFAULT_TOP_TALKERS,
+    controls: Optional[UIControls] = None,
+) -> Layout:
     """Build the dashboard ``Layout`` and populate it from live snapshots.
 
     Top: rolling stream table. Bottom, split row: top talkers on the left,
-    telemetry + alerts stacked on the right.
+    telemetry + alerts stacked on the right. A one-line footer at the bottom
+    holds the key legend (or the active inline prompt / status message).
     """
     layout = Layout(name="root")
     layout.split_column(
         Layout(name="stream", ratio=3),
         Layout(name="bottom", ratio=2),
+        Layout(name="footer", size=1),
     )
     layout["bottom"].split_row(
         Layout(name="talkers", ratio=2),
@@ -49,17 +62,28 @@ def build_layout(store: StateStore, top_n: int = DEFAULT_TOP_TALKERS) -> Layout:
         Layout(name="alerts", ratio=1),
     )
 
+    selected = controls.selected_ip if controls is not None else None
     layout["stream"].update(
         Panel(render_stream_table(store.snapshot_stream()), title="Stream")
     )
     layout["talkers"].update(
-        Panel(render_top_talkers(store.snapshot_talkers(), top_n=top_n), title="Talkers")
+        Panel(
+            render_top_talkers(
+                store.snapshot_talkers(),
+                top_n=top_n,
+                selected=selected,
+            ),
+            title="Talkers",
+        )
     )
     layout["telemetry"].update(
         Panel(render_telemetry(store.snapshot_telemetry()), title="Telemetry")
     )
     layout["alerts"].update(
         Panel(render_alerts(store.snapshot_alerts()), title="Alerts")
+    )
+    layout["footer"].update(
+        render_footer(controls.footer_text if controls is not None else "")
     )
     return layout
 
@@ -74,11 +98,13 @@ class Dashboard:
         refresh_per_second: float = DEFAULT_REFRESH_PER_SECOND,
         console: Optional[Console] = None,
         top_n: int = DEFAULT_TOP_TALKERS,
+        controls: Optional[UIControls] = None,
     ) -> None:
         if refresh_per_second <= 0:
             raise ValueError("refresh_per_second must be positive")
         self._store = store
         self._top_n = top_n
+        self._controls = controls
         self._console = console if console is not None else Console()
         self._refresh_per_second = refresh_per_second
         self._live: Optional[Live] = None
@@ -95,7 +121,7 @@ class Dashboard:
 
     def render(self) -> Layout:
         """Build the current snapshot layout (called by the Live refresh thread)."""
-        return build_layout(self._store, self._top_n)
+        return build_layout(self._store, self._top_n, self._controls)
 
     def start(self) -> None:
         """Enter alternate-screen live mode and begin auto-refreshing."""
@@ -131,6 +157,7 @@ def build_dashboard(
     refresh_per_second: float = DEFAULT_REFRESH_PER_SECOND,
     console: Optional[Console] = None,
     top_n: int = DEFAULT_TOP_TALKERS,
+    controls: Optional[UIControls] = None,
 ) -> Dashboard:
     """Create a dashboard for ``store`` (snapshots only, no mutation)."""
     return Dashboard(
@@ -138,4 +165,5 @@ def build_dashboard(
         refresh_per_second=refresh_per_second,
         console=console,
         top_n=top_n,
+        controls=controls,
     )

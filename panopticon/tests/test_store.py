@@ -10,7 +10,6 @@ from panopticon.core.store import (
     StateStore,
 )
 
-
 def ev(timestamp, src="10.0.0.1", dst="10.0.0.2", proto="tcp",
        sport=1000, dport=80, size=100):
     return PacketEvent(timestamp, src, dst, proto, sport, dport, size, "http")
@@ -150,3 +149,87 @@ class TestCounters:
         store.increment_dropped()
         store.increment_dropped(4)
         assert store.snapshot_telemetry()["dropped_packets"] == 5
+
+
+class TestTags:
+    def test_add_and_remove_tag_dedup(self):
+        store = StateStore()
+        store.add_tag("1.1.1.1", "server")
+        store.add_tag("1.1.1.1", "server")
+        assert store.tags_for("1.1.1.1") == {"server"}
+
+        store.remove_tag("1.1.1.1", "missing")
+        assert store.tags_for("1.1.1.1") == {"server"}
+
+        store.remove_tag("1.1.1.1", "server")
+        assert store.tags_for("1.1.1.1") == set()
+        assert "1.1.1.1" not in store.snapshot_tags()
+
+    def test_talker_snapshot_merges_tags(self):
+        store = StateStore()
+        store.update(ev(0.0, src="1.1.1.1"), now=0.0)
+        store.add_tag("1.1.1.1", "server")
+        store.add_tag("1.1.1.1", "web")
+        snap = store.snapshot_talkers()
+        assert snap["1.1.1.1"]["tags"] == ["server", "web"]
+        assert snap["1.1.1.1"]["pkts"] == 1
+
+    def test_talker_without_tags_has_empty_list(self):
+        store = StateStore()
+        store.update(ev(0.0, src="1.1.1.1"), now=0.0)
+        assert store.snapshot_talkers()["1.1.1.1"]["tags"] == []
+
+    def test_tags_survive_lru_eviction(self):
+        store = StateStore()
+        store.add_tag("10.0.0.1", "server")
+        store.update(ev(0.0, src="10.0.0.1"), now=0.0)
+        for i in range(MAX_TALKERS):
+            store.update(
+                ev(float(i), src=f"9.{i // 65536}.{(i // 256) % 256}.{i % 256}"),
+                now=float(i),
+            )
+        assert "10.0.0.1" not in store.snapshot_talkers()
+        assert store.tags_for("10.0.0.1") == {"server"}
+
+        store.update(ev(9999.0, src="10.0.0.1"), now=9999.0)
+        assert store.snapshot_talkers()["10.0.0.1"]["tags"] == ["server"]
+
+    def test_pinned_talker_survives_ttl_prune(self):
+        store = StateStore()
+        store.update(ev(0.0, src="pinned"), now=0.0)
+        store.add_tag("pinned", "pinned")
+        assert store.prune(now=10000.0) == 0
+        assert "pinned" in store.snapshot_talkers()
+
+        store.update(ev(0.0, src="boring"), now=0.0)
+        assert store.prune(now=10000.0) == 1
+        assert "boring" not in store.snapshot_talkers()
+
+    def test_load_tags_bulk_import(self):
+        store = StateStore()
+        store.load_tags({"1.1.1.1": ["a", "a"], "2.2.2.2": ["b"]})
+        assert store.tags_for("1.1.1.1") == {"a"}
+        assert store.tags_for("2.2.2.2") == {"b"}
+
+    def test_snapshot_tags_returns_sorted_lists(self):
+        store = StateStore()
+        store.add_tag("1.1.1.1", "z")
+        store.add_tag("1.1.1.1", "a")
+        assert store.snapshot_tags() == {"1.1.1.1": ["a", "z"]}
+
+
+class TestFlows:
+    def test_flow_tracking_records_local_port(self):
+        store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
+        store.update(ev(0.0, src="10.0.0.1", dst="8.8.8.8", sport=4444, dport=80), now=0.0)
+        flow = store.snapshot_flow("8.8.8.8")
+        assert flow == {"local_port": 4444, "remote_port": 80, "proto": "tcp"}
+
+    def test_flow_tracking_remotes_side(self):
+        store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
+        store.update(ev(0.0, src="8.8.8.8", dst="10.0.0.1", sport=80, dport=4444), now=0.0)
+        assert store.snapshot_flow("8.8.8.8")["local_port"] == 4444
+
+    def test_flow_for_unknown_ip_is_none(self):
+        store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
+        assert store.snapshot_flow("nope") is None

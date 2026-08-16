@@ -17,6 +17,7 @@ import os
 import select
 import sys
 import threading
+from typing import Callable, Optional
 
 try:
     import msvcrt  # Windows only
@@ -39,17 +40,25 @@ DEFAULT_POLL_INTERVAL = 0.1
 
 
 class KeyboardWatcher:
-    """Watch stdin for the quit key without ever blocking the caller."""
+    """Watch stdin for the quit key without ever blocking the caller.
+
+    Optionally forwards every keypress (raw bytes on POSIX, characters on
+    Windows) to an ``on_key`` callback so the dashboard can implement
+    selection, tagging, and kill interactions without ever calling the
+    blocking ``input()``.
+    """
 
     def __init__(
         self,
         stop_event: threading.Event,
         stdin=None,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
+        on_key: Optional[Callable[[bytes], None]] = None,
     ) -> None:
         self._stop = stop_event
         self._stdin = stdin if stdin is not None else sys.stdin
         self._poll = poll_interval
+        self._on_key = on_key
         self._exit = threading.Event()
         self._thread: threading.Thread | None = None
         self._termios_restore = None
@@ -130,6 +139,7 @@ class KeyboardWatcher:
                 return
             if not data:  # EOF
                 return
+            self._notify(data)
             if self._contains_quit(data):
                 self._stop.set()
             self._drain()
@@ -149,14 +159,18 @@ class KeyboardWatcher:
                 return
             if not chunk:
                 return
+            self._notify(chunk)
             if self._contains_quit(chunk):
                 self._stop.set()
 
     def _run_windows(self) -> None:
         while not self._exit.is_set() and not self._stop.is_set():
             try:
-                if msvcrt.kbhit() and msvcrt.getwch() in WINDOWS_QUIT_KEYS:
-                    self._stop.set()
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+                    self._notify(ch.encode("utf-8", errors="replace"))
+                    if ch in WINDOWS_QUIT_KEYS:
+                        self._stop.set()
             except Exception:  # noqa: BLE001 - console input went away
                 return
             self._exit.wait(self._poll)
@@ -164,6 +178,15 @@ class KeyboardWatcher:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _notify(self, data: bytes) -> None:
+        """Forward raw key bytes to the registered handler, if any."""
+        if self._on_key is None:
+            return
+        try:
+            self._on_key(data)
+        except Exception:  # noqa: BLE001 - a handler bug must not kill the watcher
+            pass
 
     def _contains_quit(self, data: bytes) -> bool:
         return any(key in data for key in POSIX_QUIT_KEYS)

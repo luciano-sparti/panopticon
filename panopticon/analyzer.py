@@ -19,6 +19,7 @@ is not purged out from under the pipeline.
 from __future__ import annotations
 
 import argparse
+import json
 import queue
 import signal
 import sys
@@ -26,6 +27,7 @@ import threading
 import time
 from typing import List, Optional
 
+from panopticon import __version__
 from panopticon.capture import Sniffer, auto_detect_interface, preflight
 from panopticon.core.store import StateStore
 from panopticon.detection import (
@@ -36,7 +38,7 @@ from panopticon.detection import (
 )
 from panopticon.export import CsvExportWriter, PcapExportWriter
 from panopticon.pipeline import PipelineWorker
-from panopticon.ui import KeyboardWatcher, build_dashboard
+from panopticon.ui import KeyboardWatcher, UIControls, build_dashboard
 
 DEFAULT_REFRESH = 0.5
 DEFAULT_QUEUE_SIZE = 10000
@@ -46,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="panopticon",
         description="Terminal real-time network traffic analyzer and mini-NIDS.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"panopticon {__version__}",
     )
     parser.add_argument(
         "-i",
@@ -109,7 +116,41 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable the Rich dashboard and keyboard watcher (headless/CI)",
     )
+    parser.add_argument(
+        "--enable-kill",
+        action="store_true",
+        help="Enable the scoped k key to SIGTERM the process owning a flow",
+    )
+    parser.add_argument(
+        "--tags-file",
+        default="",
+        help="JSON {ip: [tags]} path loaded at start and saved on exit",
+    )
     return parser
+
+
+def _load_tags(store: StateStore, path: str) -> None:
+    """Load ``{ip: [tags]}`` JSON into the store (best-effort)."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+    for ip, tags in data.items():
+        if not isinstance(tags, list):
+            continue
+        store.load_tags({str(ip): [t for t in tags if isinstance(t, str)]})
+
+
+def _save_tags(store: StateStore, path: str) -> None:
+    """Persist the tag map as ``{ip: [tags]}`` JSON (best-effort)."""
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(store.snapshot_tags(), fh, indent=2)
+    except OSError as exc:
+        print(f"panopticon: could not save tags file {path}: {exc}", file=sys.stderr)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -129,6 +170,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     store = StateStore()
+    if args.tags_file:
+        _load_tags(store, args.tags_file)
     packet_queue: queue.Queue = queue.Queue(maxsize=args.queue_size)
     try:
         exporters = [
@@ -173,9 +216,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     worker.start()
     sniffer.start()
+    controls = UIControls(store, enable_kill=args.enable_kill)
     keyboard = None
     if not args.no_ui:
-        keyboard = KeyboardWatcher(keyboard_stop).start()
+        keyboard = KeyboardWatcher(keyboard_stop, on_key=controls.feed).start()
     print(
         f"panopticon: capturing on {interface}"
         + (f" with BPF filter {args.filter!r}" if args.filter else "")
@@ -214,7 +258,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             # Drive the dashboard from Live's refresh thread, which reads
             # store snapshots only; the maintenance loop runs alongside it.
             ui_refresh_per_second = 1.0 / max(args.refresh, 1e-3)
-            dashboard = build_dashboard(store, refresh_per_second=ui_refresh_per_second)
+            dashboard = build_dashboard(
+                store,
+                refresh_per_second=ui_refresh_per_second,
+                controls=controls,
+            )
             with dashboard:
                 run_loop()
     except KeyboardInterrupt:
@@ -232,6 +280,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         worker.flush()
         for exporter in exporters:
             exporter.close()
+        if args.tags_file:
+            _save_tags(store, args.tags_file)
 
     telemetry = store.snapshot_telemetry()
     print(
