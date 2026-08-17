@@ -123,8 +123,9 @@ def test_alert_severity_colour_mapping():
     table = render_alerts([AlertEvent(0.0, "critical", "syn_scan",
                                       "scan", "s", "d")])
     cell = table.columns[1]._cells[0]
-    assert cell.plain == "critical"
+    assert "crit" in cell.plain
     assert cell.style == "red"
+
 
 
 # ----------------------------------------------------------------------
@@ -519,3 +520,161 @@ def test_analyzer_no_ui_flag_default_and_explicit():
     parser = build_parser()
     assert parser.parse_args([]).no_ui is False
     assert parser.parse_args(["--no-ui"]).no_ui is True
+
+
+# ----------------------------------------------------------------------
+# New UI/UX Accessibility & Ergonomics Tests
+# ----------------------------------------------------------------------
+
+
+def test_stream_freeze_toggle_caches_rendered_stream():
+    store = populated_store()
+    controls = UIControls(store)
+    dashboard = build_dashboard(store, controls=controls)
+
+    # Initial render
+    layout1 = dashboard.render()
+    assert "[LIVE]" in render_text(layout1["stream"])
+
+    # Toggle pause
+    controls.feed(b" ")
+    assert controls.paused is True
+    assert "FROZEN" in controls.status
+
+    layout2 = dashboard.render()
+    assert "[⏸ PAUSED]" in render_text(layout2["stream"])
+
+    # Push new event into store
+    store.update(ev(99.0, src="10.0.0.99", size=999), now=99.0)
+
+    # While paused, rendered stream remains frozen
+    layout3 = dashboard.render()
+    assert "10.0.0.99" not in render_text(layout3["stream"])
+
+    # Unpause
+    controls.feed(b" ")
+    assert controls.paused is False
+    layout4 = dashboard.render()
+    assert "10.0.0.99" in render_text(layout4["stream"])
+
+
+def test_metric_toggle_flips_sorting_and_selector_order():
+    store = StateStore()
+    # ipA: 10 packets, 100 bytes
+    # ipB: 1 packet, 1000 bytes
+    for _ in range(10):
+        store.update(ev(0.0, src="ipA", size=10), now=0.0)
+    store.update(ev(0.0, src="ipB", size=1000), now=0.0)
+
+    controls = UIControls(store)
+    # Default is bytes: ipB (1000 B) > ipA (100 B)
+    assert controls._ordered_talkers() == ["ipB", "ipA"]
+
+    # Toggle metric to pkts
+    controls.feed(b"m")
+    assert controls.metric == "pkts"
+    assert "pkts" in controls.status
+    # With pkts: ipA (10 pkts) > ipB (1 pkt)
+    assert controls._ordered_talkers() == ["ipA", "ipB"]
+
+
+def test_zoom_view_modes_render_focused_panels():
+    store = populated_store()
+    controls = UIControls(store)
+
+    # 1: Stream zoom
+    controls.feed(b"1")
+    assert controls.view_mode == 1
+    layout = build_layout(store, controls=controls)
+    assert layout.get("stream") is not None
+    assert layout.get("talkers") is None
+
+    # 2: Talkers zoom
+    controls.feed(b"2")
+    assert controls.view_mode == 2
+    layout = build_layout(store, controls=controls)
+    assert layout.get("talkers") is not None
+    assert layout.get("stream") is None
+
+    # 3: Alerts zoom
+    controls.feed(b"3")
+    assert controls.view_mode == 3
+    layout = build_layout(store, controls=controls)
+    assert layout.get("alerts") is not None
+    assert layout.get("stream") is None
+
+    # 4: Telemetry zoom
+    controls.feed(b"4")
+    assert controls.view_mode == 4
+    layout = build_layout(store, controls=controls)
+    assert layout.get("telemetry") is not None
+    assert layout.get("stream") is None
+
+    # 0: Reset to all
+    controls.feed(b"0")
+    assert controls.view_mode == 0
+    layout = build_layout(store, controls=controls)
+    assert layout.get("stream") is not None
+    assert layout.get("talkers") is not None
+    assert layout.get("alerts") is not None
+
+
+def test_tab_cycles_view_modes():
+    controls = UIControls(StateStore())
+    assert controls.view_mode == 0
+    controls.feed(b"\t")
+    assert controls.view_mode == 1
+    controls.feed(b"\t")
+    assert controls.view_mode == 2
+    controls.feed(b"\t")
+    assert controls.view_mode == 3
+    controls.feed(b"\t")
+    assert controls.view_mode == 4
+    controls.feed(b"\t")
+    assert controls.view_mode == 0
+
+
+def test_host_inspector_toggle_and_render():
+    store = populated_store()
+    controls = UIControls(store)
+    controls.selected_ip = "10.0.0.1"
+
+    # Press Enter to open inspector
+    controls.feed(b"\r")
+    assert controls.inspecting_ip == "10.0.0.1"
+
+    layout = build_layout(store, controls=controls)
+    assert layout.get("inspector") is not None
+    text = render_text(layout["inspector"])
+    assert "Host Inspection: 10.0.0.1" in text
+    assert "Total Packets" in text
+
+    # Press Enter again to close
+    controls.feed(b"\r")
+    assert controls.inspecting_ip is None
+
+
+
+def test_stream_table_with_direction_indicators():
+    events = [
+        ev(1.0, src="192.168.1.10", dst="8.8.8.8"),
+        ev(2.0, src="8.8.8.8", dst="192.168.1.10"),
+        ev(3.0, src="192.168.1.10", dst="192.168.1.10"),
+    ]
+    self_ips = {"192.168.1.10"}
+    table = render_stream_table(events, self_ips=self_ips)
+    text = render_text(table)
+    assert "Dir" in text
+    assert "▲" in text  # Outbound
+    assert "▼" in text  # Inbound
+    assert "↔" in text  # Internal
+
+
+def test_multi_state_talker_pinned_and_selected():
+    store = StateStore()
+    store.update(ev(0.0, src="10.0.0.1", size=100))
+    store.add_tag("10.0.0.1", PINNED_TAG)
+    table = render_top_talkers(store.snapshot_talkers(), selected="10.0.0.1")
+    text = render_text(table)
+    assert "▸ ● 10.0.0.1" in text
+

@@ -23,6 +23,7 @@ from .keys import UIControls, legend_text
 from .tables import (
     DEFAULT_TOP_TALKERS,
     render_alerts,
+    render_host_inspector,
     render_stream_table,
     render_telemetry,
     render_top_talkers,
@@ -40,14 +41,100 @@ def build_layout(
     store: StateStore,
     top_n: int = DEFAULT_TOP_TALKERS,
     controls: Optional[UIControls] = None,
+    stream_events: Optional[list] = None,
 ) -> Layout:
     """Build the dashboard ``Layout`` and populate it from live snapshots.
 
-    Top: rolling stream table. Bottom, split row: top talkers on the left,
-    telemetry + alerts stacked on the right. A one-line footer at the bottom
-    holds the key legend (or the active inline prompt / status message).
+    Supports full 4-pane layout, single-pane zoom modes (1-4), and the
+    interactive host inspector overlay.
     """
     layout = Layout(name="root")
+    view_mode = controls.view_mode if controls is not None else 0
+    metric = controls.metric if controls is not None else "bytes"
+    selected = controls.selected_ip if controls is not None else None
+    inspecting_ip = controls.inspecting_ip if controls is not None else None
+    paused = controls.paused if controls is not None else False
+
+    events = stream_events if stream_events is not None else store.snapshot_stream()
+    talkers = store.snapshot_talkers()
+    telemetry = store.snapshot_telemetry()
+    alerts = store.snapshot_alerts()
+    footer = render_footer(controls.footer_text if controls is not None else "")
+
+    if inspecting_ip:
+        # Inspector overlay
+        layout.split_column(
+            Layout(name="inspector", ratio=1),
+            Layout(name="footer", size=1),
+        )
+        flow = store.snapshot_flow(inspecting_ip)
+        talker_data = talkers.get(inspecting_ip)
+        tags = store.tags_for(inspecting_ip)
+        layout["inspector"].update(
+            Panel(
+                render_host_inspector(
+                    inspecting_ip,
+                    talker_data=talker_data,
+                    flow_data=flow,
+                    tags=sorted(tags),
+                    alerts=alerts,
+                ),
+                title=f"Inspector — {inspecting_ip}",
+            )
+        )
+        layout["footer"].update(footer)
+        return layout
+
+    stream_title = "Stream [⏸ PAUSED]" if paused else "Stream [LIVE]"
+    stream_panel = Panel(render_stream_table(events), title=stream_title)
+    talkers_panel = Panel(
+        render_top_talkers(talkers, top_n=top_n, metric=metric, selected=selected),
+        title="Talkers",
+    )
+    telemetry_panel = Panel(render_telemetry(telemetry), title="Telemetry")
+    alerts_panel = Panel(render_alerts(alerts), title="Alerts")
+
+    if view_mode == 1:
+        # Stream zoom
+        layout.split_column(
+            Layout(name="stream", ratio=1),
+            Layout(name="footer", size=1),
+        )
+        layout["stream"].update(stream_panel)
+        layout["footer"].update(footer)
+        return layout
+
+    if view_mode == 2:
+        # Talkers zoom
+        layout.split_column(
+            Layout(name="talkers", ratio=1),
+            Layout(name="footer", size=1),
+        )
+        layout["talkers"].update(talkers_panel)
+        layout["footer"].update(footer)
+        return layout
+
+    if view_mode == 3:
+        # Alerts zoom
+        layout.split_column(
+            Layout(name="alerts", ratio=1),
+            Layout(name="footer", size=1),
+        )
+        layout["alerts"].update(alerts_panel)
+        layout["footer"].update(footer)
+        return layout
+
+    if view_mode == 4:
+        # Telemetry zoom
+        layout.split_column(
+            Layout(name="telemetry", ratio=1),
+            Layout(name="footer", size=1),
+        )
+        layout["telemetry"].update(telemetry_panel)
+        layout["footer"].update(footer)
+        return layout
+
+    # Default 4-pane layout
     layout.split_column(
         Layout(name="stream", ratio=3),
         Layout(name="bottom", ratio=2),
@@ -62,30 +149,13 @@ def build_layout(
         Layout(name="alerts", ratio=1),
     )
 
-    selected = controls.selected_ip if controls is not None else None
-    layout["stream"].update(
-        Panel(render_stream_table(store.snapshot_stream()), title="Stream")
-    )
-    layout["talkers"].update(
-        Panel(
-            render_top_talkers(
-                store.snapshot_talkers(),
-                top_n=top_n,
-                selected=selected,
-            ),
-            title="Talkers",
-        )
-    )
-    layout["telemetry"].update(
-        Panel(render_telemetry(store.snapshot_telemetry()), title="Telemetry")
-    )
-    layout["alerts"].update(
-        Panel(render_alerts(store.snapshot_alerts()), title="Alerts")
-    )
-    layout["footer"].update(
-        render_footer(controls.footer_text if controls is not None else "")
-    )
+    layout["stream"].update(stream_panel)
+    layout["talkers"].update(talkers_panel)
+    layout["telemetry"].update(telemetry_panel)
+    layout["alerts"].update(alerts_panel)
+    layout["footer"].update(footer)
     return layout
+
 
 
 class Dashboard:
@@ -108,6 +178,7 @@ class Dashboard:
         self._console = console if console is not None else Console()
         self._refresh_per_second = refresh_per_second
         self._live: Optional[Live] = None
+        self._frozen_stream: Optional[list] = None
 
     @property
     def console(self) -> Console:
@@ -121,7 +192,22 @@ class Dashboard:
 
     def render(self) -> Layout:
         """Build the current snapshot layout (called by the Live refresh thread)."""
-        return build_layout(self._store, self._top_n, self._controls)
+        is_paused = self._controls.paused if self._controls is not None else False
+        if is_paused:
+            if self._frozen_stream is None:
+                self._frozen_stream = self._store.snapshot_stream()
+            stream_events = self._frozen_stream
+        else:
+            self._frozen_stream = None
+            stream_events = self._store.snapshot_stream()
+
+        return build_layout(
+            self._store,
+            self._top_n,
+            self._controls,
+            stream_events=stream_events,
+        )
+
 
     def start(self) -> None:
         """Enter alternate-screen live mode and begin auto-refreshing."""

@@ -25,6 +25,13 @@ SEVERITY_STYLES = {
     "critical": "red",
 }
 
+# Dual-coding text badges for colorblind accessibility.
+SEVERITY_BADGES = {
+    "info": "ℹ info",
+    "warn": "⚠ warn",
+    "critical": "⛔ crit",
+}
+
 DEFAULT_TOP_TALKERS = 10
 BAR_WIDTH = 10
 
@@ -50,7 +57,10 @@ def _bar(value: float, maximum: float, width: int = BAR_WIDTH) -> str:
     return bars.ljust(width)
 
 
-def render_stream_table(events: List[PacketEvent]) -> Table:
+def render_stream_table(
+    events: List[PacketEvent],
+    self_ips: Optional[Set[str]] = None,
+) -> Table:
     """Render the rolling stream buffer (newest events first)."""
     table = Table(
         header_style="bold cyan",
@@ -58,6 +68,8 @@ def render_stream_table(events: List[PacketEvent]) -> Table:
         box=None,
     )
     table.add_column("Time", justify="right", no_wrap=True)
+    if self_ips:
+        table.add_column("Dir", justify="center", no_wrap=True)
     table.add_column("Source", style="bold", no_wrap=True)
     table.add_column("Destination", style="bold", no_wrap=True)
     table.add_column("Proto", justify="center", no_wrap=True)
@@ -70,15 +82,26 @@ def render_stream_table(events: List[PacketEvent]) -> Table:
             if event.sport or event.dport
             else "—"
         )
-        table.add_row(
-            _fmt_time(event.timestamp),
+        row = [_fmt_time(event.timestamp)]
+        if self_ips:
+            if event.src in self_ips and event.dst in self_ips:
+                direction = "↔"
+            elif event.src in self_ips:
+                direction = "▲"
+            elif event.dst in self_ips:
+                direction = "▼"
+            else:
+                direction = "·"
+            row.append(direction)
+        row.extend([
             event.src or "?",
             event.dst or "?",
             event.proto,
             ports,
             str(event.size),
             event.service or "",
-        )
+        ])
+        table.add_row(*row)
     return table
 
 
@@ -126,12 +149,17 @@ def render_top_talkers(
     pinned_lines = []
     for ip, stats in ranked:
         tags = stats.get("tags", ()) or ()
-        if ip == selected:
+        is_sel = (ip == selected)
+        is_pin = "pinned" in tags
+        if is_sel and is_pin:
+            host = Text(f"▸ ● {ip}", style="bold reverse yellow")
+        elif is_sel:
             host = Text(f"▸ {ip}", style="bold reverse yellow")
-        elif "pinned" in tags:
+        elif is_pin:
             host = Text(f"● {ip}", style="bold yellow")
         else:
             host = Text(ip)
+
         table.add_row(
             host,
             f"{stats.get('pkts', 0):,}",
@@ -139,7 +167,7 @@ def render_top_talkers(
             _bar(stats.get(metric, 0), maximum),
             ", ".join(tags) if tags else "",
         )
-        if "pinned" in tags:
+        if is_pin:
             pinned_lines.append(
                 f"{ip} — {stats.get('pkts', 0):,} pkts · {stats.get('bytes', 0):,} B"
             )
@@ -162,7 +190,7 @@ def render_telemetry(telemetry: Dict) -> Table:
 
     mix = telemetry.get("protocol_mix", {}) or {}
     mix_text = ", ".join(
-        f"{proto} {pct}%" for proto, pct in sorted(mix.items()) if pct
+        f"{proto.upper()} {pct}%" for proto, pct in sorted(mix.items()) if pct
     )
     rows = [
         ("Packets/sec", f"{telemetry.get('packets_per_sec', 0.0):,.1f}"),
@@ -181,7 +209,7 @@ def render_telemetry(telemetry: Dict) -> Table:
 
 
 def render_alerts(alerts: List[AlertEvent]) -> Table:
-    """Render the alert buffer, colour-mapped by severity."""
+    """Render the alert buffer, colour-mapped by severity with dual-coding."""
     table = Table(
         header_style="bold red",
         expand=True,
@@ -192,10 +220,60 @@ def render_alerts(alerts: List[AlertEvent]) -> Table:
     table.add_column("Kind", no_wrap=True)
     table.add_column("Summary")
     for alert in reversed(alerts):
+        sev_key = alert.severity.lower()
+        badge = SEVERITY_BADGES.get(sev_key, alert.severity)
+        style = SEVERITY_STYLES.get(sev_key, "white")
         table.add_row(
             _fmt_time(alert.time),
-            Text(alert.severity, style=SEVERITY_STYLES.get(alert.severity, "white")),
+            Text(badge, style=style),
             alert.kind,
             alert.summary,
         )
     return table
+
+
+def render_host_inspector(
+    ip: str,
+    talker_data: Optional[Dict],
+    flow_data: Optional[Dict],
+    tags: List[str],
+    alerts: List[AlertEvent],
+) -> Table:
+    """Render a deep-dive inspection table for a selected host."""
+    table = Table(
+        title=f"Host Inspection: {ip}",
+        header_style="bold cyan",
+        expand=True,
+        box=None,
+    )
+    table.add_column("Property", style="bold", no_wrap=True)
+    table.add_column("Value")
+
+    tag_str = ", ".join(tags) if tags else "none"
+    pkts = talker_data.get("pkts", 0) if talker_data else 0
+    bytes_val = talker_data.get("bytes", 0) if talker_data else 0
+    last_seen = talker_data.get("last_seen", 0.0) if talker_data else 0.0
+    last_str = _fmt_time(last_seen) if last_seen else "unknown"
+
+    table.add_row("Host IP", ip)
+    table.add_row("Tags", tag_str)
+    table.add_row("Total Packets", f"{pkts:,}")
+    table.add_row("Total Volume", f"{bytes_val:,} bytes")
+    table.add_row("Last Active", last_str)
+
+    if flow_data:
+        flow_str = f"local port {flow_data['local_port']} ↔ remote port {flow_data['remote_port']} ({flow_data['proto']})"
+        table.add_row("Active Flow", flow_str)
+    else:
+        table.add_row("Active Flow", "no active flow recorded")
+
+    host_alerts = [a for a in alerts if a.src == ip or a.dst == ip]
+    if host_alerts:
+        alert_lines = [f"[{a.severity}] {a.kind}: {a.summary}" for a in host_alerts[-3:]]
+        table.add_row("Related Alerts", "\n".join(alert_lines))
+    else:
+        table.add_row("Related Alerts", "none")
+
+    table.caption = "Press Enter or Esc to return to dashboard"
+    return table
+

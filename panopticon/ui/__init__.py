@@ -9,7 +9,9 @@ from .dashboard import Dashboard, build_dashboard, build_layout
 from .keyboard import KeyboardWatcher
 from .keys import PINNED_TAG, UIControls, legend_text
 from .tables import (
+    SEVERITY_BADGES,
     render_alerts,
+    render_host_inspector,
     render_stream_table,
     render_telemetry,
     render_top_talkers,
@@ -19,12 +21,15 @@ __all__ = [
     "Dashboard",
     "KeyboardWatcher",
     "PINNED_TAG",
+    "SEVERITY_BADGES",
     "UIControls",
     "build_dashboard",
     "build_layout",
     "legend_text",
     "render_alerts",
+    "render_host_inspector",
     "render_stream_table",
     "render_telemetry",
     "render_top_talkers",
 ]
+

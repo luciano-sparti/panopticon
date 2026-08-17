@@ -31,11 +31,22 @@ PINNED_TAG = "pinned"
 
 def legend_text(enable_kill: bool = False) -> str:
     """The persistent dashboard footer legend."""
-    parts = ["q quit", "↑/↓ select", "p pin", "t tag", "T untag"]
+    parts = [
+        "q quit",
+        "↑/↓ select",
+        "Space freeze",
+        "m metric",
+        "1-4 zoom",
+        "Enter inspect",
+        "p pin",
+        "t tag",
+        "T untag",
+    ]
     if enable_kill:
         parts.append("k kill")
     parts.append("? help")
     return " | ".join(parts)
+
 
 
 def default_kill_resolver(
@@ -73,6 +84,10 @@ class UIControls:
         self.status = ""
         self._status_expires = 0.0
         self._esc: Optional[bytes] = None
+        self.paused: bool = False
+        self.metric: str = "bytes"
+        self.view_mode: int = 0  # 0=all, 1=stream, 2=talkers, 3=alerts, 4=telemetry
+        self.inspecting_ip: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Key input
@@ -90,6 +105,8 @@ class UIControls:
                     seq = self._esc
                     self._esc = None
                     self._on_escape(seq)
+                elif len(self._esc) > 3:
+                    self._esc = None
                 continue
             if b == b"\x1b":
                 self._esc = b
@@ -106,18 +123,47 @@ class UIControls:
         if self.prompt is not None:
             self._on_prompt_key(b)
             return
+
         if b == b"q":
             return  # quit is handled by the watcher setting the stop event
-        if b == b"j":  # vi-style down
+
+        if b in (b"\r", b"\n"):
+            if self.inspecting_ip is not None:
+                self.inspecting_ip = None
+            elif self.selected_ip:
+                self.inspecting_ip = self.selected_ip
+            return
+
+        if self.inspecting_ip is not None:
+            # Any non-quit key exits inspection mode
+            self.inspecting_ip = None
+            return
+
+        if b == b" ":
+            self.paused = not self.paused
+            self._set_status("STREAM FROZEN [PAUSED]" if self.paused else "STREAM RESUMED [LIVE]")
+        elif b == b"m":
+            self.metric = "pkts" if self.metric == "bytes" else "bytes"
+            self._set_status(f"talkers sorted by {self.metric}")
+        elif b in (b"0", b"1", b"2", b"3", b"4"):
+            self.view_mode = int(b.decode("ascii"))
+            names = {0: "all panes", 1: "stream", 2: "talkers", 3: "alerts", 4: "telemetry"}
+            self._set_status(f"view: {names[self.view_mode]}")
+        elif b == b"\t":
+            self.view_mode = (self.view_mode + 1) % 5
+            names = {0: "all panes", 1: "stream", 2: "talkers", 3: "alerts", 4: "telemetry"}
+            self._set_status(f"view: {names[self.view_mode]}")
+        elif b == b"j":  # vi-style down
             self._move_selection(1)
+        elif b in (b"k", b"K", b"x"):
+            self._on_kill()
         elif b == b"p":
             self._toggle_pin()
+
         elif b == b"t":
             self._begin_tag_prompt()
         elif b == b"T":
             self._begin_untag_prompt()
-        elif b == b"k":
-            self._on_kill()
         elif b == b"?":
             self._set_status(legend_text(self.enable_kill))
 
@@ -128,9 +174,13 @@ class UIControls:
         if prompt["kind"] == "confirm":
             if b == b"y":
                 self._execute_kill(prompt)
-            elif b in (b"n", b"\r", b"\n"):
+            elif b in (b"n", b"\r", b"\n", b"\x1b"):
                 self.prompt = None
                 self._set_status("kill aborted")
+            return
+        if b == b"\x1b":
+            self.prompt = None
+            self._set_status("prompt cancelled")
             return
         if b in (b"\r", b"\n"):
             self._submit_tag_prompt()
@@ -144,6 +194,7 @@ class UIControls:
             if ch.isprintable():
                 prompt["buffer"] += ch
 
+
     # ------------------------------------------------------------------
     # Selector
     # ------------------------------------------------------------------
@@ -153,7 +204,8 @@ class UIControls:
             talkers = self._store.snapshot_talkers()
         except Exception:  # noqa: BLE001 - store may not be populated/ready
             return []
-        return [ip for ip, _ in rank_talkers(talkers)][: self._top_n]
+        return [ip for ip, _ in rank_talkers(talkers, metric=self.metric)][: self._top_n]
+
 
     def _move_selection(self, delta: int) -> None:
         ordered = self._ordered_talkers()

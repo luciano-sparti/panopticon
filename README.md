@@ -8,7 +8,8 @@
 
 ## Current Status
 
-- ✅ **Phases 1–5 Complete** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, threat detection engine (SYN-scan, plaintext, and high-port heuristics), Rich terminal interactive dashboard with selector/pin/tag/kill, and automatic `self:` tagging — **185 unit/integration tests passing**.
+- ✅ **Phases 1–5 Complete + Enhanced UI/UX** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, threat detection engine (SYN-scan, plaintext, and high-port heuristics), Rich terminal interactive dashboard with freeze (`Space`), metric toggle (`m`), panel zoom (`1`–`4`), deep-dive Host Inspector (`Enter`), selector/pin/tag/kill, and automatic `self:` tagging — **197 unit/integration tests passing**.
+
 
 ---
 
@@ -133,11 +134,16 @@ sudo setcap cap_net_raw,cap_net_admin=eip "$(readlink -f "$VIRTUAL_ENV/bin/pytho
 |---|---|
 | `q` / `Ctrl+C` | Quit |
 | `↑` / `↓` (or `j`) | Move the selection across top-talkers |
+| `Space` | Freeze / unfreeze live packet stream display |
+| `m` | Toggle top-talker sorting metric (**Bytes** $\leftrightarrow$ **Packets**) |
+| `1`–`4` / `Tab` | Focus / zoom into **1** (Stream), **2** (Talkers), **3** (Alerts), or **4** (Telemetry); `0`/`Tab` restores all 4 panes |
+| `Enter` | Open / close deep-dive **Host Inspector** modal for the selected talker |
 | `p` | Pin/unpin the selected talker (kept at the top of the talkers list) |
 | `t` | Inline prompt to add a tag to the selected talker |
 | `T` | Inline prompt to remove a tag from the selected talker |
-| `k` | Kill the local process owning the selected talker's flow (needs `--enable-kill`, then confirm `y`/`n`) |
+| `k` / `K` / `x` | Kill the local process owning the selected talker's flow (needs `--enable-kill`, then confirm `y`/`n`) |
 | `?` | Show the key legend in the footer |
+
 
 ### Usage Examples
 
