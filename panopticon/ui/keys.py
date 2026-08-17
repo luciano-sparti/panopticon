@@ -38,9 +38,12 @@ def legend_text(enable_kill: bool = False) -> str:
     return " | ".join(parts)
 
 
-def default_kill_resolver(ip: str, local_port: int) -> List[int]:
+def default_kill_resolver(
+    ip: str, local_port: int, remote_port: Optional[int] = None
+) -> List[int]:
     """Resolve the local PIDs owning a flow (via ``/proc``)."""
-    return local_pids_for_port(local_port)
+    return local_pids_for_port(local_port, remote_port=remote_port)
+
 
 
 class UIControls:
@@ -222,7 +225,13 @@ class UIControls:
         if flow is None:
             self._set_status(f"no known flow for {ip}")
             return
-        pids = self._kill_resolver(ip, flow["local_port"]) or []
+        remote_port = flow.get("remote_port")
+        try:
+            pids = self._kill_resolver(
+                ip, flow["local_port"], remote_port=remote_port
+            ) or []
+        except TypeError:
+            pids = self._kill_resolver(ip, flow["local_port"]) or []
         if not pids:
             self._set_status(
                 f"no local process found for {ip} on port {flow['local_port']}"
@@ -234,6 +243,7 @@ class UIControls:
             "port": flow["local_port"],
             "pids": pids,
         }
+
 
     def _execute_kill(self, prompt: dict) -> None:
         self.prompt = None

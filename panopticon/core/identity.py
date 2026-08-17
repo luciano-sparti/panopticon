@@ -85,21 +85,57 @@ def _if_inet6_ips(text: str) -> Set[str]:
     return ips
 
 
+def _fallback_ips() -> Set[str]:
+    """Local IPs discovered via Scapy / socket on platforms without ``/proc``."""
+    ips: Set[str] = set()
+    try:
+        from scapy.arch import get_if_addr, get_if_list
+
+        for iface in get_if_list():
+            try:
+                addr = get_if_addr(iface)
+                if addr and addr not in ("0.0.0.0", "127.0.0.1", "::1"):
+                    ips.add(addr)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    try:
+        name = socket.gethostname()
+        for res in socket.getaddrinfo(name, None):
+            sockaddr = res[4]
+            if sockaddr and isinstance(sockaddr, tuple) and sockaddr[0]:
+                ip = str(sockaddr[0])
+                if not ip.startswith("127.") and ip not in ("::1", "0.0.0.0"):
+                    ips.add(ip)
+    except Exception:
+        pass
+    return ips
+
+
 def resolve_owned_ips() -> Set[str]:
     """All of this host's own IPs: non-loopback interface addresses plus
     loopback (``127.0.0.1`` / ``::1``).
 
-    Falls back to loopback-only when the kernel tables cannot be read, so
-    the feature stays safe on platforms without ``/proc``.
+    First attempts kernel-direct reading via ``/proc``; falls back to
+    Scapy/socket interface enumeration on non-Linux platforms without ``/proc``.
     """
     owned: Set[str] = set(LOOPBACK_IPS)
+    proc_found = False
     for path, parser in (
         ("/proc/net/fib_trie", _fib_trie_ips),
         ("/proc/net/if_inet6", _if_inet6_ips),
     ):
         try:
             with open(path, "r", encoding="utf-8") as fh:
-                owned |= parser(fh.read())
+                parsed = parser(fh.read())
+                if parsed:
+                    owned |= parsed
+                    proc_found = True
         except OSError:
             continue
+    if not proc_found:
+        owned |= _fallback_ips()
     return owned
+

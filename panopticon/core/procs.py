@@ -54,28 +54,42 @@ def _all_socket_inodes(proc_root: str) -> Set[str]:
 
 
 def _inet_table_inodes(
-    text: str, port: int, candidates: Set[str]
+    text: str,
+    port: int,
+    candidates: Set[str],
+    remote_port: Optional[int] = None,
 ) -> Set[str]:
     """Candidate socket inodes bound to ``port`` in a ``/proc/net/*`` dump.
 
     Each data row's local end is ``<addr-hex>:<port-hex>``; the inode
-    column is identified not by position (it varies across kernels) but by
-    value, matching against the ``candidates`` collected from process fd
-    tables. Both listening (remote 0.0.0.0:0) and connected (remote peer)
-    sockets count, since either way the process owns the flow on that port.
+    column is identified by matching against ``candidates``. When
+    ``remote_port`` is specified, exact 4-tuple flow matches (local_port +
+    remote_port) take precedence over general listening port matches.
     """
-    matched: Set[str] = set()
-    want = f":{port:04X}"
+    want_local = f":{port:04X}"
+    want_remote = (
+        f":{remote_port:04X}"
+        if remote_port is not None and remote_port > 0
+        else None
+    )
+
+    flow_matched: Set[str] = set()
+    port_matched: Set[str] = set()
+
     for line in text.splitlines():
         if not line.strip() or line.startswith(_HEADER):
             continue
         fields = line.split()
-        if len(fields) < 4 or not fields[1].endswith(want):
+        if len(fields) < 4 or not fields[1].endswith(want_local):
             continue
+        is_exact_flow = want_remote is not None and fields[2].endswith(want_remote)
         for field in fields[4:]:
             if field in candidates:
-                matched.add(field)
-    return matched
+                if is_exact_flow:
+                    flow_matched.add(field)
+                port_matched.add(field)
+
+    return flow_matched if flow_matched else port_matched
 
 
 def _pids_for_socket_inodes(proc_root: str, inodes: Iterable[str]) -> List[int]:
@@ -107,8 +121,15 @@ def _pids_for_socket_inodes(proc_root: str, inodes: Iterable[str]) -> List[int]:
     return sorted(pids)
 
 
-def local_pids_for_port(port: int, proc_root: str = "/proc") -> List[int]:
-    """PIDs with a socket bound to the given local port (Linux ``/proc``)."""
+def local_pids_for_port(
+    port: int,
+    proc_root: str = "/proc",
+    remote_port: Optional[int] = None,
+) -> List[int]:
+    """PIDs with a socket bound to the given local port (Linux ``/proc``).
+
+    Optionally matches ``remote_port`` to prioritize established 4-tuple flows.
+    """
     candidates = _all_socket_inodes(proc_root)
     if not candidates:
         return []
@@ -118,5 +139,7 @@ def local_pids_for_port(port: int, proc_root: str = "/proc") -> List[int]:
             _read_text(os.path.join(proc_root, "net", table)),
             port,
             candidates,
+            remote_port=remote_port,
         )
     return _pids_for_socket_inodes(proc_root, matched)
+

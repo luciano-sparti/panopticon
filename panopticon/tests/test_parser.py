@@ -136,3 +136,46 @@ def test_non_tcp_flags_are_empty():
         UDP(sport=50000, dport=53),
     )
     assert parse(pkt).flags == ""
+
+
+def test_corrupt_packet_bytes_raises_exception():
+    class CorruptPacket:
+        time = 100.0
+
+        def __bytes__(self):
+            raise ValueError("Corrupted wire data")
+
+        def getlayer(self, cls):
+            raise TypeError("Corrupted layer")
+
+    ev = parse(CorruptPacket())
+    assert ev.proto == "other"
+    assert ev.size == 0
+    assert ev.timestamp == 100.0
+
+
+def test_corrupt_transport_layer_recovers_gracefully():
+    class BrokenTcpPacket:
+        time = 200.0
+
+        def __bytes__(self):
+            return b"\x00" * 40
+
+        def getlayer(self, cls):
+            if cls == IP:
+                return IP(src="1.1.1.1", dst="2.2.2.2")
+            if cls == TCP:
+                class BrokenTCP:
+                    @property
+                    def sport(self):
+                        raise RuntimeError("Broken field")
+                return BrokenTCP()
+            return None
+
+    ev = parse(BrokenTcpPacket())
+    assert ev.src == "1.1.1.1"
+    assert ev.dst == "2.2.2.2"
+    assert ev.proto == "tcp"
+    assert ev.sport == 0
+    assert ev.dport == 0
+

@@ -79,3 +79,25 @@ def test_pids_aggregate_across_tcp_udp_and_multi_fd(tmp_path):
 
 def test_missing_proc_root_returns_empty(tmp_path):
     assert procs.local_pids_for_port(8080, proc_root=str(tmp_path / "nope")) == []
+
+
+def test_pids_prioritizes_exact_remote_port_flow(tmp_path):
+    # Two sockets on local port 8080: one connected to remote 443 (inode 1111, pid 10),
+    # one connected to remote 80 (inode 2222, pid 20).
+    tables = {
+        "tcp": """  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+       0: 0100007F:1F90 0A000001:01BB 01 00000000:00000000 000:00 0 0 0 0 0 1111
+       1: 0100007F:1F90 0A000001:0050 01 00000000:00000000 000:00 0 0 0 0 0 2222
+"""
+    }
+    pid_inodes = {10: {3: 1111}, 20: {4: 2222}}
+    proc = _make_proc_tree(tmp_path, tables, pid_inodes)
+    # Specifying remote_port=443 returns only PID 10
+    assert procs.local_pids_for_port(8080, proc_root=proc, remote_port=443) == [10]
+    # Specifying remote_port=80 returns only PID 20
+    assert procs.local_pids_for_port(8080, proc_root=proc, remote_port=80) == [20]
+    # Specifying unmatched remote_port falls back to all sockets on port 8080
+    assert procs.local_pids_for_port(8080, proc_root=proc, remote_port=9999) == [10, 20]
+    # Without remote_port, returns all matching local port
+    assert procs.local_pids_for_port(8080, proc_root=proc) == [10, 20]
+

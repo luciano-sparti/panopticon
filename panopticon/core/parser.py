@@ -22,7 +22,7 @@ def _fallback_event(pkt: Packet) -> PacketEvent:
     """Return a minimal "other" event for unparseable frames."""
     try:
         size = len(bytes(pkt))
-    except (AttributeError, IndexError):
+    except Exception:  # noqa: BLE001 - catch any serialization/dissection error
         size = 0
     return PacketEvent(
         timestamp=float(getattr(pkt, "time", 0.0) or 0.0),
@@ -46,22 +46,26 @@ def parse(pkt: Packet) -> PacketEvent:
         return _fallback_packet()
 
     try:
-        timestamp = float(pkt.time or 0.0)
+        timestamp = float(getattr(pkt, "time", 0.0) or 0.0)
         size = len(bytes(pkt))
-    except (AttributeError, IndexError):
+    except Exception:  # noqa: BLE001
         return _fallback_event(pkt)
 
     # Locate the network layer, skipping link layers (Ethernet, VLAN, etc.).
-    ip = pkt.getlayer(IP)
-    if ip is None:
-        ip = pkt.getlayer(IPv6)
+    try:
+        ip = pkt.getlayer(IP)
+        if ip is None:
+            ip = pkt.getlayer(IPv6)
+    except Exception:  # noqa: BLE001
+        return _fallback_event(pkt)
+
     if ip is None:
         return _fallback_event(pkt)
 
     try:
-        src = ip.src
-        dst = ip.dst
-    except (AttributeError, IndexError):
+        src = str(getattr(ip, "src", "") or "")
+        dst = str(getattr(ip, "dst", "") or "")
+    except Exception:  # noqa: BLE001
         return _fallback_event(pkt)
 
     proto = "other"
@@ -69,9 +73,12 @@ def parse(pkt: Packet) -> PacketEvent:
     dport = 0
     flags = ""
 
-    tcp = pkt.getlayer(TCP)
-    udp = pkt.getlayer(UDP)
-    icmp = pkt.getlayer(ICMP)
+    try:
+        tcp = pkt.getlayer(TCP)
+        udp = pkt.getlayer(UDP)
+        icmp = pkt.getlayer(ICMP)
+    except Exception:  # noqa: BLE001
+        tcp, udp, icmp = None, None, None
 
     if tcp is not None:
         proto = "tcp"
@@ -79,14 +86,14 @@ def parse(pkt: Packet) -> PacketEvent:
             sport = int(tcp.sport)
             dport = int(tcp.dport)
             flags = str(tcp.flags)
-        except (AttributeError, IndexError):
+        except Exception:  # noqa: BLE001
             sport, dport, flags = 0, 0, ""
     elif udp is not None:
         proto = "udp"
         try:
             sport = int(udp.sport)
             dport = int(udp.dport)
-        except (AttributeError, IndexError):
+        except Exception:  # noqa: BLE001
             sport, dport = 0, 0
     elif icmp is not None:
         proto = "icmp"
@@ -103,6 +110,7 @@ def parse(pkt: Packet) -> PacketEvent:
         service=service,
         flags=flags,
     )
+
 
 
 def _fallback_packet() -> PacketEvent:
