@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import signal
 import sys
@@ -36,7 +37,7 @@ from panopticon.detection import (
     PlaintextDetector,
     SynScanDetector,
 )
-from panopticon.export import CsvExportWriter, PcapExportWriter
+from panopticon.export import AlertExportWriter, CsvExportWriter, PcapExportWriter
 from panopticon.pipeline import PipelineWorker
 from panopticon.ui import KeyboardWatcher, UIControls, build_dashboard
 
@@ -126,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="JSON {ip: [tags]} path loaded at start and saved on exit",
     )
+    parser.add_argument(
+        "--export-alerts",
+        default="",
+        help="JSONL path for detector alerts (default: session.alerts.jsonl)",
+    )
     return parser
 
 
@@ -185,6 +191,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    alert_path = args.export_alerts or ""
+    if not alert_path:
+        pcap_dir = os.path.dirname(os.path.abspath(args.export_pcap))
+        alert_path = os.path.join(pcap_dir, "session.alerts.jsonl")
+    alert_exporter = AlertExportWriter(alert_path)
     detector = DetectorEngine(
         store,
         detectors=[
@@ -202,6 +214,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         store,
         exporters=exporters,
         detector=detector,
+        alert_exporter=alert_exporter,
     )
     sniffer = Sniffer(interface, packet_queue, store, bpf_filter=args.filter or None)
 
@@ -280,6 +293,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         worker.flush()
         for exporter in exporters:
             exporter.close()
+        try:
+            alert_exporter.close()
+        except OSError as exc:
+            print(f"panopticon: could not close alert log {alert_path}: {exc}", file=sys.stderr)
         if args.tags_file:
             _save_tags(store, args.tags_file)
 
@@ -288,7 +305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"panopticon: stopped — {telemetry['total_packets']} packets, "
         f"{telemetry['dropped_packets']} dropped, {drained} drained, "
         f"{telemetry['alerts_total']} alerts, "
-        f"exports: {args.export_pcap}, {args.export_csv}"
+        f"exports: {args.export_pcap}, {args.export_csv}, {alert_path}"
     )
     for alert in store.snapshot_alerts():
         print(f"  [{alert.severity}] {alert.kind}: {alert.summary}")

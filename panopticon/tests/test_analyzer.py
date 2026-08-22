@@ -173,3 +173,27 @@ def test_main_no_ui_headless_path(monkeypatch, tmp_path, capsys):
     out, err = capsys.readouterr()
     assert "capturing on eth0" in out
     assert "1 packets" in out
+
+
+def test_main_default_alert_path_is_written(monkeypatch, tmp_path, capsys):
+    patch_healthy(monkeypatch)
+    assert main(make_args(tmp_path)) == 0
+    out, err = capsys.readouterr()
+    assert "session.alerts.jsonl" in out
+    alert_path = tmp_path / "session.alerts.jsonl"
+    assert alert_path.exists()
+    lines = alert_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    first = json.loads(lines[0])
+    assert first["kind"] == "high_port"
+
+
+def test_main_custom_alert_path(monkeypatch, tmp_path, capsys):
+    patch_healthy(monkeypatch)
+    alert_path = tmp_path / "custom.alerts.jsonl"
+    assert main(make_args(tmp_path, ["--export-alerts", str(alert_path)])) == 0
+    out, err = capsys.readouterr()
+    assert "custom.alerts.jsonl" in out
+    lines = alert_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["kind"] == "high_port"

@@ -86,9 +86,9 @@ class DetectorEngine:
     ) -> Optional[AlertEvent]:
         """Run every detector on one event; return the first accepted alert.
 
-        All detectors are consulted per event; every accepted alert is pushed
-        to the store. Uses ``event.timestamp`` when ``now`` is omitted so
-        detection stays deterministic on synthetic timestamps.
+        Every accepted alert is pushed to the store. Uses ``event.timestamp``
+        when ``now`` is omitted so detection stays deterministic on
+        synthetic timestamps.
         """
         ts = event.timestamp if now is None else now
         first: Optional[AlertEvent] = None

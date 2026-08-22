@@ -1,15 +1,18 @@
 """Pipeline worker tests using synthetic events (no root / live capture)."""
 
 import csv
+import json
 import queue
 import time
 
 from scapy.utils import rdpcap
 
-from panopticon.core.event import PacketEvent
+from panopticon.core.event import AlertEvent, PacketEvent
 from panopticon.core.store import StateStore
 from panopticon.detection.base import BaseDetector, DetectorEngine
+from panopticon.detection.high_port import HighPortDetector
 from panopticon.detection.syn_scan import SynScanDetector
+from panopticon.export.alert_writer import AlertExportWriter
 from panopticon.export.base import BaseExporter
 from panopticon.export.csv_writer import CsvExportWriter
 from panopticon.export.pcap_writer import PcapExportWriter
@@ -180,3 +183,55 @@ def test_drain_contains_exporter_errors():
     assert worker.drain() == 3
     assert worker.error_count == 3
     assert q.empty()
+
+
+def test_worker_export_alerts_to_alert_writer(tmp_path):
+    q = queue.Queue()
+    store = StateStore()
+    alert_path = tmp_path / "alerts.jsonl"
+    worker = PipelineWorker(
+        q,
+        store,
+        detector=DetectorEngine(
+            store,
+            detectors=[HighPortDetector(threshold_port=1000)],
+        ),
+        alert_exporter=AlertExportWriter(str(alert_path)),
+    )
+    for i in range(3):
+        q.put((b"\x00" * 60, ev(float(i), dport=50000)))
+    worker.drain()
+    worker.flush()
+
+    lines = alert_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    first = json.loads(lines[0])
+    assert first["kind"] == "high_port"
+    assert first["summary"] == "connection to high/registered destination port 50000"
+    assert store.snapshot_telemetry()["alerts_total"] == 1
+
+
+def test_worker_alert_exporter_errors_are_contained(tmp_path):
+    q = queue.Queue()
+    alert_path = tmp_path / "alerts.jsonl"
+    class RaisingAlertExporter:
+        def write_alert(self, alert): raise OSError("disk full")
+        def flush(self): pass
+        def close(self): pass
+    worker = PipelineWorker(
+        q,
+        StateStore(),
+        detector=DetectorEngine(
+            StateStore(),
+            detectors=[HighPortDetector(threshold_port=1000)],
+        ),
+        alert_exporter=RaisingAlertExporter(),
+    )
+    q.put((b"\x00" * 60, ev(0.0, dport=50000)))
+    worker.start()
+    try:
+        assert wait_until(lambda: worker.error_count >= 1)
+        assert worker.is_alive()
+    finally:
+        worker.stop()
+        worker.join(timeout=2)

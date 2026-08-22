@@ -8,7 +8,7 @@
 
 ## Current Status
 
-- ✅ **Phases 1–5 Complete + Enhanced UI/UX** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, threat detection engine (SYN-scan, plaintext, and high-port heuristics), Rich terminal interactive dashboard with freeze (`Space`), metric toggle (`m`), panel zoom (`1`–`4`), deep-dive Host Inspector (`Enter`), selector/pin/tag/kill, and automatic `self:` tagging — **197 unit/integration tests passing**.
+- ✅ **Phases 1–6 Complete + Enhanced UI/UX** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, threat detection engine (SYN-scan, plaintext, and high-port heuristics), alert JSONL exporter (`session.alerts.jsonl`), Rich terminal interactive dashboard with freeze (`Space`), metric toggle (`m`), panel zoom (`1`–`4`), deep-dive Host Inspector (`Enter`), selector/pin/tag/kill, and automatic `self:` tagging — **204 unit/integration tests passing**.
 
 
 ---

@@ -1,13 +1,15 @@
 """Export writer tests (no root / live capture needed)."""
 
 import csv
+import json
 
 from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether
 from scapy.packet import Raw
 from scapy.utils import rdpcap
 
-from panopticon.core.event import PacketEvent
+from panopticon.core.event import AlertEvent, PacketEvent
+from panopticon.export.alert_writer import AlertExportWriter
 from panopticon.export.csv_writer import CSV_FIELDNAMES, CsvExportWriter
 from panopticon.export.pcap_writer import PcapExportWriter
 
@@ -139,3 +141,44 @@ def test_csv_writer_writes_single_header_on_new_file(tmp_path):
     with open(path, newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert len(rows) == 0
+
+
+def test_alert_writer_round_trip(tmp_path):
+    path = tmp_path / "alerts.jsonl"
+    writer = AlertExportWriter(str(path))
+    writer.write_alert(AlertEvent(1.0, "info", "high_port", "port 50000", "10.0.0.1", "8.8.8.8"))
+    writer.write_alert(AlertEvent(2.0, "warn", "plaintext", "ftp creds", "10.0.0.2", "8.8.8.8"))
+    writer.flush()
+    writer.close()
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    assert first["kind"] == "high_port"
+    assert first["severity"] == "info"
+    assert first["summary"] == "port 50000"
+    assert first["src"] == "10.0.0.1"
+    assert first["dst"] == "8.8.8.8"
+
+
+def test_alert_writer_appends_across_runs(tmp_path):
+    path = tmp_path / "alerts.jsonl"
+    w1 = AlertExportWriter(str(path))
+    w1.write_alert(AlertEvent(1.0, "info", "syn_scan", "scan", "1.1.1.1", "2.2.2.2"))
+    w1.close()
+    w2 = AlertExportWriter(str(path))
+    w2.write_alert(AlertEvent(2.0, "warn", "high_port", "port", "3.3.3.3", "4.4.4.4"))
+    w2.close()
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[1])["kind"] == "high_port"
+
+
+def test_alert_writer_flushes_on_threshold(tmp_path):
+    path = tmp_path / "alerts.jsonl"
+    writer = AlertExportWriter(str(path), flush_every=2)
+    writer.write_alert(AlertEvent(1.0, "info", "x", "y", "1.1.1.1", "2.2.2.2"))
+    writer.write_alert(AlertEvent(2.0, "info", "x", "y", "1.1.1.1", "2.2.2.2"))
+    writer.close()
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2

@@ -44,6 +44,7 @@ class PipelineWorker(threading.Thread):
         exporters: Iterable = (),
         detector: Optional[DetectorEngine] = None,
         poll_interval: float = POLL_INTERVAL,
+        alert_exporter=None,
     ) -> None:
         super().__init__(name="panopticon-pipeline", daemon=True)
         self._queue = packet_queue
@@ -51,6 +52,7 @@ class PipelineWorker(threading.Thread):
         self._exporters = tuple(exporters)
         self._detector = detector if detector is not None else DetectorEngine(store)
         self._poll_interval = poll_interval
+        self._alert_exporter = alert_exporter
         self._stop = threading.Event()
         self._error_count = 0
         self._last_error: Optional[str] = None
@@ -103,6 +105,8 @@ class PipelineWorker(threading.Thread):
         """Push buffered exporter data to disk."""
         for exporter in self._exporters:
             exporter.flush()
+        if self._alert_exporter is not None:
+            self._alert_exporter.flush()
 
     def prune(self, now: Optional[float] = None) -> int:
         """Run detector housekeeping (expiry / dedup-map cleanup)."""
@@ -126,6 +130,11 @@ class PipelineWorker(threading.Thread):
     def _process(self, raw: bytes, event: PacketEvent) -> None:
         """Record, detect, and export a single packet."""
         self._store.update(event)
-        self._detector.process_event(event, None, raw)
+        alert = self._detector.process_event(event, None, raw)
+        if alert is not None and self._alert_exporter is not None:
+            try:
+                self._alert_exporter.write_alert(alert)
+            except Exception as exc:  # noqa: BLE001 - contained, see #9
+                self._record_error(exc)
         for exporter in self._exporters:
             exporter.write(raw, event)
