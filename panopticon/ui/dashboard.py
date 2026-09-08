@@ -131,6 +131,7 @@ def build_layout(
         proto_mix = dict(Counter(e.proto for e in host_events))
         first_seen = min((e.timestamp for e in host_events), default=None)
         flow = store.snapshot_flow(inspecting_ip)
+        sessions = store.snapshot_sessions(ip=inspecting_ip, limit=20)
         talker_data = talkers.get(inspecting_ip)
         tags = store.tags_for(inspecting_ip)
         split_with_header(("inspector", {"ratio": 1}))
@@ -145,6 +146,7 @@ def build_layout(
                     ports_contacted=ports,
                     proto_mix=proto_mix,
                     first_seen=first_seen,
+                    sessions=sessions,
                 ),
                 title=f"Inspector — {inspecting_ip}",
             )

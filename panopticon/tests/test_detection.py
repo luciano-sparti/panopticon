@@ -1,9 +1,13 @@
 """DetectorEngine manager tests (dedup, store wiring, housekeeping)."""
 
 from panopticon.core.clock import Clock
-from panopticon.core.event import AlertEvent
+from panopticon.core.event import AlertEvent, PacketEvent
 from panopticon.core.store import ALERTS_MAXLEN, StateStore
+from panopticon.detection.bandwidth import BandwidthDetector
 from panopticon.detection.base import BaseDetector, DetectorEngine
+from panopticon.detection.beacon import BeaconDetector
+from panopticon.detection.port_knock import PortKnockDetector
+from panopticon.detection.scan_probe import ScanProbeDetector
 
 
 class FixedDetector(BaseDetector):
@@ -147,3 +151,35 @@ def test_alert_buffer_is_bounded_and_counter_keeps_running():
         store.add_alert(alert(float(i)))
     assert len(store.snapshot_alerts()) == ALERTS_MAXLEN
     assert store.snapshot_telemetry()["alerts_total"] == ALERTS_MAXLEN + 10
+
+
+def _ev(ts, src="10.0.0.1", dst="8.8.8.8", dport=80, flags="S", size=60, proto="tcp"):
+    return PacketEvent(ts, src, dst, proto, 40000, dport, size, "", flags=flags)
+
+
+def test_phase9_detectors_run_together_through_engine():
+    store = StateStore()
+    engine = DetectorEngine(
+        store,
+        detectors=[
+            BeaconDetector(min_conns=3),
+            BandwidthDetector(window=10.0, threshold=2000),
+            PortKnockDetector(threshold=3, window=10.0),
+            ScanProbeDetector(threshold=3),
+        ],
+    )
+    # Beacon: three regular 10s connections -> beaconing alert lands in store.
+    for i in range(3):
+        engine.process_event(_ev(10.0 * (i + 1)), 10.0 * (i + 1))
+    # Port knock sweep: 4 distinct ports on one host.
+    for _, port in enumerate((80, 443, 22, 8080)):
+        engine.process_event(_ev(1.0, dport=port), 1.0)
+    # Bandwidth burst: 2750 bytes from a dedicated source over a full 10s window.
+    for i in range(12):
+        engine.process_event(_ev(1.0 + i, src="10.0.0.9", size=250), 1.0 + i)
+    # Probe scan: four NULL probes.
+    for i in range(4):
+        engine.process_event(_ev(2.0, dport=3000 + i, flags=""), 2.0)
+
+    kinds = {a.kind for a in store.snapshot_alerts()}
+    assert {"beaconing", "port_knock", "bandwidth", "null_scan"} <= kinds

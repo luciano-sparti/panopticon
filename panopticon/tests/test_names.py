@@ -158,3 +158,62 @@ class TestStoreNames:
         store = StateStore()
         store.update(ev(0.0, src="10.0.0.1"))
         store.pump_hostnames()  # must not raise
+
+    def test_sni_hostname_maps_to_src(self):
+        store = StateStore()
+        event = PacketEvent(
+            0.0,
+            "10.0.0.9",
+            "1.2.3.4",
+            "tcp",
+            55000,
+            443,
+            100,
+            service="https",
+            payload=b"",
+            hostname="chat.example.com",
+            hostname_ip="10.0.0.9",
+        )
+        store.update(event)
+        assert store.snapshot_talkers()["10.0.0.9"]["name"] == "chat.example.com"
+
+    def test_dhcp_hostname_maps_to_leased_ip(self):
+        store = StateStore()
+        event = PacketEvent(
+            0.0,
+            "0.0.0.0",
+            "255.255.255.255",
+            "udp",
+            68,
+            67,
+            300,
+            service="",
+            payload=b"",
+            hostname="gaming-rig",
+            hostname_ip="192.168.1.50",
+        )
+        store.update(event)
+        snap = store.snapshot_talkers()
+        assert snap["192.168.1.50"]["name"] == "gaming-rig"
+        assert snap["192.168.1.50"]["class"] == "private"
+
+    def test_sniffed_hostname_beats_resolver(self):
+        resolver = HostnameResolver(enabled=True, resolve=lambda ip: f"ptr-{ip}.example.com")
+        store = StateStore(names=resolver)
+        store.update(
+            PacketEvent(
+                0.0,
+                "10.0.0.9",
+                "1.2.3.4",
+                "tcp",
+                55000,
+                443,
+                100,
+                service="https",
+                payload=b"",
+                hostname="sni-name",
+                hostname_ip="10.0.0.9",
+            )
+        )
+        store.pump_hostnames()
+        assert store.snapshot_talkers()["10.0.0.9"]["name"] == "sni-name"

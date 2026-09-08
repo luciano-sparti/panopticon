@@ -256,6 +256,7 @@ def render_telemetry(
         ("Avg packet size", _fmt_bytes(telemetry.get("avg_packet_size", 0.0))),
         ("Protocol mix", mix_text or "—"),
         ("Unique hosts", f"{telemetry.get('unique_hosts', 0):,}"),
+        ("Active sessions", f"{telemetry.get('active_sessions', 0):,}"),
         ("Total packets", f"{telemetry.get('total_packets', 0):,}"),
         ("Total bytes", _fmt_bytes(telemetry.get("total_bytes", 0))),
         ("Dropped", dropped_detail),
@@ -323,11 +324,12 @@ def render_host_inspector(
     ports_contacted: list[int] | None = None,
     proto_mix: dict[str, int] | None = None,
     first_seen: float | None = None,
+    sessions: list[dict] | None = None,
 ) -> Table:
     """Render a deep-dive inspection table for a selected host.
 
-    ``ports_contacted`` / ``proto_mix`` / ``first_seen`` are derived from the
-    stream buffer by the dashboard; all are optional.
+    ``ports_contacted`` / ``proto_mix`` / ``first_seen`` / ``sessions`` are
+    derived from the store snapshots by the dashboard; all are optional.
     """
     table = Table(
         title=f"Host Inspection: {ip}",
@@ -383,6 +385,17 @@ def render_host_inspector(
             if count
         )
         table.add_row("Protocol Mix (buffer)", mix_str or "—")
+
+    if sessions:
+        lines = [
+            f"{s['proto'].upper()} {s['src']}:{s['sport']} → {s['dst']}:{s['dport']} "
+            f"[{s['state']}] {s['pkts']:,} pkts"
+            for s in sessions[:6]
+        ]
+        table.add_row(
+            f"Sessions ({len(sessions)})",
+            "\n".join(lines) if lines else "none",
+        )
 
     host_alerts = [a for a in alerts if a.src == ip or a.dst == ip]
     if host_alerts:

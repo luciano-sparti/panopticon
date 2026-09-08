@@ -41,6 +41,8 @@ class PacketEvent:
     service: str
     flags: str = ""
     payload: bytes = b""
+    hostname: str = ""
+    hostname_ip: str = ""
 
 
 @dataclass(frozen=True)

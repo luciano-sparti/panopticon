@@ -71,9 +71,9 @@ safety-net work lands before performance and feature work.
   time for detection windows) — NTP steps / pcap replays break TTLs today.
 - [x] **9.6** Reverse DNS (cached, opt-in) + private/link-local/multicast
   classification for inspector/talkers tables.
-- [ ] **9.7** TLS SNI / DHCP hostname extraction in parser → meaningful names.
-- [ ] **9.8** Flow/session tracking → FIN/NULL/Xmas scan detection.
-- [ ] **9.9** New detectors: beaconing, bandwidth-abuse, port-knock.
+- [x] **9.7** TLS SNI / DHCP hostname extraction in parser → meaningful names.
+- [x] **9.8** Flow/session tracking → FIN/NULL/Xmas scan detection.
+- [x] **9.9** New detectors: beaconing, bandwidth-abuse, port-knock.
 - [ ] **9.10** Config file (TOML) to replace nine hardcoded CLI flags.
 
 ## Phase 9b — UI/UX improvements

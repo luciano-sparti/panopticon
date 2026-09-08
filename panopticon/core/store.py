@@ -28,6 +28,10 @@ ALERTS_MAXLEN = 200
 MAX_TALKERS = 5000
 # Inactive talkers are purged when idle for longer than this (seconds).
 TALKER_TTL = 300
+# Sessions (conversations) idle for longer than this are purged on prune.
+SESSION_TTL = 300
+# Maximum tracked concurrent sessions (LRU-evicted beyond this).
+MAX_SESSIONS = 5000
 # EWMA weights: new_value = EWMA_ALPHA * old + EWMA_BETA * observed.
 EWMA_ALPHA = 0.9
 EWMA_BETA = 0.1
@@ -72,6 +76,13 @@ class StateStore:
         # IP -> classify_ip() result, memoized so twice-a-second snapshots of
         # up to ``MAX_TALKERS`` entries never re-parse the same addresses.
         self._class_cache: dict[str, str] = {}
+        # IP -> hostname learned from the wire (TLS SNI / DHCP option 12).
+        # Higher confidence than reverse DNS, so it wins over PTR names.
+        self._hostnames: dict[str, str] = {}
+        # Canonical session key (src, sport, dst, dport, proto) -> record.
+        # Tracked so the UI can show live conversations and the scan
+        # detectors can correlate replies; bounded by ``MAX_SESSIONS``.
+        self._sessions: dict[tuple[str, int, str, int, str], dict] = {}
         # Remote IP -> (local_port, remote_port, proto) of the last flow.
         # Used to resolve the local process for the scoped kill feature.
         self._flows: dict[str, tuple[int, int, str]] = {}
@@ -126,6 +137,24 @@ class StateStore:
                 self._tag_self(event.src)
             if event.dst in self._self_ips:
                 self._tag_self(event.dst)
+
+            if event.hostname:
+                owner = event.hostname_ip or event.src
+                if owner:
+                    self._hostnames[owner] = event.hostname
+                    # A DHCP lease names a host that may not have sent a
+                    # packet yet (its src is 0.0.0.0); surface it as a
+                    # talker so the name is immediately visible.
+                    if owner != event.src and owner not in self._top_talkers:
+                        self._top_talkers[owner] = {
+                            "pkts": 0,
+                            "bytes": 0,
+                            "last_seen": ts,
+                        }
+                        if len(self._top_talkers) > MAX_TALKERS:
+                            self._evict_lru_talker()
+
+            self._track_session(event, ts)
 
             self._acc_pkts += 1
             self._acc_bytes += event.size
@@ -204,10 +233,11 @@ class StateStore:
                     self._tags.setdefault(ip, set()).add(tag)
 
     def prune(self, now: float | None = None) -> int:
-        """Purge talkers inactive for longer than ``TALKER_TTL`` seconds.
+        """Purge stale talkers and closed/idle sessions.
 
-        Pinned talkers are never pruned so their mini-telemetry line stays
-        visible. Returns the number of entries removed.
+        Sessions idle for longer than ``SESSION_TTL`` are dropped in the
+        same pass. Returns the number of talker records removed (the return
+        semantics predate session tracking and tests rely on it).
         """
         ref = self._clock.now() if now is None else now
         with self._lock:
@@ -220,7 +250,9 @@ class StateStore:
             for ip in stale:
                 del self._top_talkers[ip]
                 self._class_cache.pop(ip, None)
+                self._hostnames.pop(ip, None)
                 self._flows.pop(ip, None)
+            self._prune_sessions(ref)
             return len(stale)
 
     def pump_hostnames(self, limit: int = 64) -> None:
@@ -277,7 +309,10 @@ class StateStore:
                     cls = classify_ip(ip)
                     self._class_cache[ip] = cls
                 talker["class"] = cls
-                talker["name"] = self._names.name_for(ip) if self._names is not None else ""
+                name = self._hostnames.get(ip)
+                if not name and self._names is not None:
+                    name = self._names.name_for(ip)
+                talker["name"] = name or ""
             return snap
 
     def snapshot_tags(self) -> dict[str, list[str]]:
@@ -294,6 +329,33 @@ class StateStore:
         """Snapshot of this host's own IPs (for stream direction markers)."""
         with self._lock:
             return set(self._self_ips)
+
+    def snapshot_sessions(self, ip: str | None = None, limit: int = 50) -> list[dict]:
+        """Most recently seen sessions, newest first.
+
+        ``ip`` optionally filters to sessions touching that address. Each
+        record: ``{"src", "sport", "dst", "dport", "proto", "state", "pkts",
+        "bytes", "first_seen", "last_seen"}``.
+        """
+        with self._lock:
+            rows = []
+            for key, rec in self._sessions.items():
+                f_src, f_sport, f_dst, f_dport, f_proto = key
+                if ip and f_src != ip and f_dst != ip:
+                    continue
+                row = dict(rec)
+                row.update(
+                    {
+                        "src": f_src,
+                        "sport": f_sport,
+                        "dst": f_dst,
+                        "dport": f_dport,
+                        "proto": f_proto,
+                    }
+                )
+                rows.append(row)
+            rows.sort(key=lambda r: r["last_seen"], reverse=True)
+            return rows[:limit]
 
     def snapshot_flow(self, ip: str) -> dict | None:
         """Last known flow for a remote ``ip``, or ``None``.
@@ -325,6 +387,9 @@ class StateStore:
                 "avg_packet_size": round(self._avg_size, 3),
                 "protocol_mix": mix,
                 "unique_hosts": len(self._top_talkers),
+                "active_sessions": sum(
+                    1 for rec in self._sessions.values() if rec["state"] != "closed"
+                ),
                 "total_packets": self._total_packets,
                 "total_bytes": self._total_bytes,
                 "dropped_packets": self._parse_failures + self._queue_drops,
@@ -346,9 +411,67 @@ class StateStore:
         self._tags.setdefault(ip, set()).add(tag)
 
     def _evict_lru_talker(self) -> None:
+        def _cleanup(ip: str) -> None:
+            self._class_cache.pop(ip, None)
+            self._hostnames.pop(ip, None)
+
         evict_lru(
             self._top_talkers,
             last_seen=lambda ip: self._top_talkers[ip]["last_seen"],
             cap=MAX_TALKERS,
-            on_evict=lambda ip: self._class_cache.pop(ip, None),
+            on_evict=_cleanup,
         )
+
+    # ------------------------------------------------------------------
+    # Session tracking (9.8)
+    # ------------------------------------------------------------------
+
+    def _track_session(self, event: PacketEvent, now: float) -> None:
+        if not event.src or not event.dst:
+            return
+        key = (event.src, event.sport, event.dst, event.dport, event.proto)
+        rec = self._sessions.get(key)
+        if rec is None:
+            self._sessions[key] = {
+                "pkts": 1,
+                "bytes": event.size,
+                "first_seen": now,
+                "last_seen": now,
+                "state": _session_state(event.proto, event.flags or "", ""),
+            }
+        else:
+            rec["pkts"] += 1
+            rec["bytes"] += event.size
+            rec["last_seen"] = now
+            rec["state"] = _session_state(event.proto, event.flags or "", rec["state"])
+        if len(self._sessions) > MAX_SESSIONS:
+            self._evict_lru_session()
+
+    def _prune_sessions(self, now: float) -> int:
+        """Drop sessions idle for longer than ``SESSION_TTL``."""
+        stale = [key for key, rec in self._sessions.items() if now - rec["last_seen"] > SESSION_TTL]
+        for key in stale:
+            del self._sessions[key]
+        return len(stale)
+
+    def _evict_lru_session(self) -> None:
+        evict_lru(
+            self._sessions,
+            last_seen=lambda key: self._sessions[key]["last_seen"],
+            cap=MAX_SESSIONS,
+        )
+
+
+def _session_state(proto: str, flags: str, prev: str) -> str:
+    """Derive a session state from a TCP/UDP event's flags.
+
+    ``handshake`` (SYN, no ACK) -> ``established`` (SYN-ACK or ACK) ->
+    ``closed`` (FIN/RST). Non-TCP conversations are ``active``.
+    """
+    if proto != "tcp":
+        return "active"
+    if "R" in flags or "F" in flags:
+        return "closed"
+    if "S" in flags or "A" in flags:
+        return "established" if "A" in flags else "handshake"
+    return prev or "established"

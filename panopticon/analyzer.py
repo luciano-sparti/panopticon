@@ -32,9 +32,13 @@ from panopticon.core.clock import Clock
 from panopticon.core.names import HostnameResolver
 from panopticon.core.store import StateStore
 from panopticon.detection import (
+    BandwidthDetector,
+    BeaconDetector,
     DetectorEngine,
     HighPortDetector,
     PlaintextDetector,
+    PortKnockDetector,
+    ScanProbeDetector,
     SynScanDetector,
 )
 from panopticon.export import AlertExportWriter, CsvExportWriter, PcapExportWriter
@@ -105,6 +109,57 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=49152,
         help="Destination ports at/above this value raise high-port alerts (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--probe-threshold",
+        type=int,
+        default=15,
+        help="Distinct FIN/NULL/Xmas probe targets that trigger a "
+        "scan alert (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--probe-window",
+        type=float,
+        default=5.0,
+        help="Sliding window (s) for probe-scan counting (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--beacon-min-conns",
+        type=int,
+        default=6,
+        help="Open connections needed before beacon regularity is checked (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--beacon-jitter",
+        type=float,
+        default=0.25,
+        help=(
+            "Max allowed gap jitter (fraction of the mean gap) for beaconing (default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
+        "--bandwidth-window",
+        type=float,
+        default=10.0,
+        help="Bandwidth-abuse accumulation window in seconds (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--bandwidth-threshold",
+        type=int,
+        default=100_000_000,
+        help="Bytes per window that trip the bandwidth-abuse alert (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--portknock-port-count",
+        type=int,
+        default=25,
+        help="Distinct ports on one host that trip a port-knock alert (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--portknock-window",
+        type=float,
+        default=10.0,
+        help="Sliding window (s) for port-knock counting (default: %(default)s)",
     )
     parser.add_argument(
         "--alert-cooldown",
@@ -217,6 +272,22 @@ def main(argv: list[str] | None = None) -> int:
             ),
             PlaintextDetector(),
             HighPortDetector(threshold_port=args.high_port),
+            ScanProbeDetector(
+                threshold=args.probe_threshold,
+                window=args.probe_window,
+            ),
+            BeaconDetector(
+                min_conns=args.beacon_min_conns,
+                jitter_ratio=args.beacon_jitter,
+            ),
+            BandwidthDetector(
+                window=args.bandwidth_window,
+                threshold=args.bandwidth_threshold,
+            ),
+            PortKnockDetector(
+                threshold=args.portknock_port_count,
+                window=args.portknock_window,
+            ),
         ],
         cooldown=args.alert_cooldown,
         clock=clock,

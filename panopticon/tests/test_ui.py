@@ -120,9 +120,10 @@ def test_render_telemetry_from_snapshot():
     telemetry = populated_store().snapshot_telemetry()
     table = render_telemetry(telemetry)
     assert isinstance(table, Table)
-    assert table.row_count == 9
+    assert table.row_count == 10
     text = render_text(table)
     assert "Alerts" in text and "5" in text
+    assert "Active sessions" in text
 
 
 def test_render_alerts_from_snapshot():

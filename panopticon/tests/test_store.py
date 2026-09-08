@@ -8,6 +8,7 @@ from panopticon.core.clock import Clock
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import (
     MAX_TALKERS,
+    SESSION_TTL,
     STREAM_MAXLEN,
     TALKER_TTL,
     StateStore,
@@ -23,9 +24,19 @@ def ev(
     dport=80,
     size=100,
     payload=b"",
+    flags="",
 ):
     return PacketEvent(
-        timestamp, src, dst, proto, sport, dport, size, service="http", payload=payload
+        timestamp,
+        src,
+        dst,
+        proto,
+        sport,
+        dport,
+        size,
+        service="http",
+        payload=payload,
+        flags=flags,
     )
 
 
@@ -214,6 +225,52 @@ class TestBoundedMemory:
         store.update(ev(0.0, src="fresh"), now=0.0)
         assert store.prune(now=TALKER_TTL) == 0
         assert "fresh" in store.snapshot_talkers()
+
+
+class TestSessions:
+    """Session/flow tracking (9.8): conversations, states, pruning."""
+
+    def test_tracks_tcp_conversations_with_state_transitions(self):
+        store = StateStore()
+        store.update(ev(0.0, src="10.0.0.1", dst="8.8.8.8", flags="S"), now=0.0)
+        store.update(ev(0.1, src="8.8.8.8", dst="10.0.0.1", flags="SA"), now=0.1)
+        sessions = store.snapshot_sessions()
+        assert len(sessions) == 2
+        states = {s["state"] for s in sessions}
+        assert "handshake" in states and "established" in states
+
+    def test_fin_closes_session(self):
+        store = StateStore()
+        store.update(ev(0.0, src="10.0.0.1", dst="8.8.8.8", flags="SA"), now=0.0)
+        store.update(ev(0.1, src="10.0.0.1", dst="8.8.8.8", flags="FA"), now=0.1)
+        closed = [s for s in store.snapshot_sessions() if s["state"] == "closed"]
+        assert closed
+        assert store.snapshot_telemetry()["active_sessions"] == 0
+
+    def test_session_filter_by_ip_and_newest_first(self):
+        store = StateStore()
+        store.update(ev(0.0, src="10.0.0.2", dst="8.8.8.8", flags="S"), now=0.0)
+        store.update(ev(0.0, src="10.0.0.1", dst="8.8.4.4", flags="S"), now=0.1)
+        only = store.snapshot_sessions(ip="10.0.0.2")
+        assert len(only) == 1
+        assert only[0]["src"] == "10.0.0.2"
+        all_s = store.snapshot_sessions()
+        assert all_s[0]["dst"] == "8.8.4.4"  # most recent first
+
+    def test_idle_sessions_pruned_with_talkers(self):
+        store = StateStore()
+        store.update(ev(0.0, src="10.0.0.1", dst="8.8.8.8", flags="S"), now=0.0)
+        assert len(store.snapshot_sessions()) == 1
+        store.prune(now=float(SESSION_TTL) + 1)
+        assert store.snapshot_sessions() == []
+
+    def test_udp_conversation_is_active(self):
+        store = StateStore()
+        store.update(ev(0.0, src="10.0.0.1", dst="8.8.8.8", proto="udp"), now=0.0)
+        sessions = store.snapshot_sessions()
+        assert len(sessions) == 1
+        assert sessions[0]["state"] == "active"
+        assert sessions[0]["proto"] == "udp"
 
 
 class TestCounters:
