@@ -120,8 +120,10 @@ Batch C — depth & interactivity:
 
 ## Phase 10 — Hygiene (can interleave)
 
-- [ ] Remove dead code: `StateStore.update_many`, `payload_gate` flag,
-  unused `self_ips` direction column, `if is_new: pass` in alert_writer.
-- [ ] Packaging: exclude tests from wheel, dynamic version, LICENSE file,
-  pin/constrain deps, move pytest out of runtime requirements,
-  gitignore `session.alerts.jsonl`, remove committed artifacts.
+- [x] Remove dead code: `StateStore.update_many`, `payload_gate` flag.
+  (`self_ips` direction column is live since A5; `if is_new: pass` in
+  alert_writer was already removed in Phase 6.)
+- [x] Packaging: exclude tests from wheel, dynamic version, LICENSE file,
+  constrain deps (upper bounds), move pytest out of runtime requirements
+  (`requirements-dev.txt`), drop committed `session.alerts.jsonl`
+  (already gitignored).

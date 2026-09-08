@@ -1,27 +1,28 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "panopticon"
-version = "0.5.0"
+dynamic = ["version"]
 description = "Terminal real-time network traffic analyzer and lightweight NIDS."
 readme = "README.md"
 authors = [
     { name = "Aredain", email = "luciano.sparti@proton.me" }
 ]
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = [
-    "scapy>=2.5.0",
-    "rich>=13.0.0",
+    "scapy>=2.5.0,<3.0",
+    "rich>=13.0.0,<16.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "mypy>=1.10.0",
-    "pytest>=7.0.0",
-    "ruff>=0.6.0",
+    "mypy>=1.10.0,<4",
+    "pytest>=7.0.0,<10",
+    "ruff>=0.6.0,<1",
 ]
 
 [project.scripts]
@@ -29,6 +30,10 @@ panopticon = "panopticon.analyzer:main"
 
 [tool.setuptools.packages.find]
 include = ["panopticon*"]
+exclude = ["panopticon.tests*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "panopticon.__version__" }
 
 [tool.ruff]
 line-length = 100

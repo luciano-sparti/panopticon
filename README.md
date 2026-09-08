@@ -60,7 +60,7 @@
 ## Prerequisites & Requirements
 
 - **Python**: `3.9+`
-- **Dependencies**: `scapy>=2.5.0`, `rich>=13.0.0`, `pytest>=7.0.0`
+- **Dependencies**: `scapy>=2.5.0,<3.0`, `rich>=13.0.0,<16.0`
 - **Elevated Privileges**: Raw socket sniffing requires administrator privileges:
   - **Linux / macOS**: Run with `sudo` or assign raw network capabilities (`sudo setcap cap_net_raw,cap_net_admin=eip $(which python3)`).
   - **Windows**: Install [Npcap](https://npcap.com/) (with WinPcap API compatibility enabled) and run shell as Administrator.
@@ -86,7 +86,12 @@
    pip install -r requirements.txt
    ```
 
-4. **Run tests**:
+4. **(Optional) Install dev tooling** (needed to run the test suite):
+   ```bash
+   pip install -r requirements-dev.txt
+   ```
+
+5. **Run tests**:
    ```bash
    pytest
    ```

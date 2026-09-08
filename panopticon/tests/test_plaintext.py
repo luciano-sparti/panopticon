@@ -135,17 +135,6 @@ def test_no_plaintext_no_marker_no_alert():
     )
 
 
-def test_payload_gate_requires_marker():
-    gated = PlaintextDetector(payload_gate=True)
-    assert gated.process_event(ev(1.0, dport=80), 1.0) is None
-    alert = gated.process_event(
-        ev(1.0, dport=80, payload=b"GET /index HTTP/1.1"),
-        1.0,
-    )
-    assert alert is not None
-    assert alert.severity == "warn"
-
-
 def test_scan_is_limited_to_head_bytes():
     detector = PlaintextDetector(max_scan_bytes=8)
     assert (

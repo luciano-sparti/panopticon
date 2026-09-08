@@ -160,12 +160,6 @@ class StateStore:
             self._acc_bytes += event.size
             self._acc_size_sum += event.size
 
-    def update_many(self, events, now: float | None = None) -> None:
-        """Record multiple events in one lock acquisition."""
-        with self._lock:
-            for event in events:
-                self.update(event, now)
-
     def increment_parse_failure(self, count: int = 1) -> None:
         """Atomically count a frame that failed parsing."""
         with self._lock:

@@ -3,8 +3,7 @@
 Two tiers:
 
 (a) Port-based: the destination or source port is a well-known plaintext
-    service (http/80, ftp/21, telnet/23, smtp/25). Optionally gated on
-    payload evidence via ``payload_gate``.
+    service (http/80, ftp/21, telnet/23, smtp/25).
 
 (b) Payload-based: the first ``max_scan_bytes`` of the transport payload
     carried on the ``PacketEvent`` are scanned for cleartext markers.
@@ -41,10 +40,8 @@ class PlaintextDetector(BaseDetector):
 
     def __init__(
         self,
-        payload_gate: bool = False,
         max_scan_bytes: int = DEFAULT_PAYLOAD_SCAN_BYTES,
     ) -> None:
-        self._payload_gate = payload_gate
         self._max_scan = max_scan_bytes
 
     def process_event(
@@ -61,7 +58,7 @@ class PlaintextDetector(BaseDetector):
         port_hit = event.dport in PLAINTEXT_PORTS or event.sport in PLAINTEXT_PORTS
         marker = self._find_marker(event.payload)
 
-        if port_hit and (not self._payload_gate or marker is not None):
+        if port_hit:
             if event.dport in PLAINTEXT_PORTS:
                 port = event.dport
                 direction = "to"
