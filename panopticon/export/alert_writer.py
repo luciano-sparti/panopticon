@@ -8,8 +8,6 @@ runs keep one alert log. Flush cadence defaults to every 10 alerts.
 from __future__ import annotations
 
 import json
-import os
-from typing import Optional
 
 from .base import BaseExporter
 
@@ -22,12 +20,10 @@ class AlertExportWriter:
     def __init__(self, path: str, flush_every: int = DEFAULT_FLUSH_EVERY) -> None:
         self._path = path
         self._flush_every = flush_every
-        is_new = not os.path.exists(path) or os.path.getsize(path) == 0
+        # JSONL has no header; the file is opened in append mode so
+        # consecutive runs keep one alert log.
         self._fh = open(path, "a", encoding="utf-8")
         self._count = 0
-        if is_new:
-            # JSONL has no header; keep file creation explicit for tools.
-            pass
 
     def write_alert(self, alert) -> None:
         self._fh.write(json.dumps({

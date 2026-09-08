@@ -9,7 +9,7 @@ safe to call from the UI refresh thread at any cadence.
 from __future__ import annotations
 
 import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from rich.table import Table
 from rich.text import Text
@@ -34,6 +34,21 @@ SEVERITY_BADGES = {
 
 DEFAULT_TOP_TALKERS = 10
 BAR_WIDTH = 10
+
+# Severity ranking used by the alert filter (None = show everything).
+_SEVERITY_LEVEL = {"info": 0, "warn": 1, "critical": 2}
+
+
+def _fmt_bytes(n: float) -> str:
+    """Human-readable byte count (IEC units, 1 decimal below GiB)."""
+    n = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(n) < 1024.0 or unit == "TiB":
+            if unit == "B":
+                return f"{int(n):,} {unit}"
+            return f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} TiB"
 
 
 def _fmt_time(ts: float) -> str:
@@ -125,12 +140,16 @@ def render_top_talkers(
     top_n: int = DEFAULT_TOP_TALKERS,
     metric: str = "bytes",
     selected: Optional[str] = None,
+    rates: Optional[Dict[str, float]] = None,
+    bar_peak: Optional[float] = None,
 ) -> Table:
     """Render the busiest hosts with ASCII block activity bars.
 
     ``talkers`` is the deep copy returned by ``StateStore.snapshot_talkers``.
     Pinned talkers sort to the top (with a mini-telemetry caption) and the
-    currently selected host is highlighted.
+    currently selected host is highlighted. ``rates`` maps ip -> bytes/sec
+    (computed by the Dashboard between refresh ticks); ``bar_peak`` overrides
+    the bar scaling maximum (a decaying peak keeps bars comparable over time).
     """
     table = Table(
         title=f"Top {top_n} Talkers ({metric})",
@@ -141,11 +160,14 @@ def render_top_talkers(
     table.add_column("Host", style="bold", no_wrap=True)
     table.add_column("Packets", justify="right")
     table.add_column("Bytes", justify="right")
+    table.add_column("Rate", justify="right", no_wrap=True)
     table.add_column("Activity", justify="left")
     table.add_column("Tags", no_wrap=True)
 
     ranked = rank_talkers(talkers, metric)[:top_n]
-    maximum = max((stats.get(metric, 0) for _, stats in ranked), default=0)
+    maximum = bar_peak if bar_peak is not None else max(
+        (stats.get(metric, 0) for _, stats in ranked), default=0
+    )
     pinned_lines = []
     for ip, stats in ranked:
         tags = stats.get("tags", ()) or ()
@@ -160,26 +182,36 @@ def render_top_talkers(
         else:
             host = Text(ip)
 
+        rate = (rates or {}).get(ip, 0.0)
         table.add_row(
             host,
             f"{stats.get('pkts', 0):,}",
-            f"{stats.get('bytes', 0):,}",
+            _fmt_bytes(stats.get('bytes', 0)),
+            f"{_fmt_bytes(rate)}/s" if rate >= 1 else "—",
             _bar(stats.get(metric, 0), maximum),
             ", ".join(tags) if tags else "",
         )
         if is_pin:
             pinned_lines.append(
-                f"{ip} — {stats.get('pkts', 0):,} pkts · {stats.get('bytes', 0):,} B"
+                f"{ip} — {stats.get('pkts', 0):,} pkts · "
+                f"{_fmt_bytes(stats.get('bytes', 0))}"
             )
     if pinned_lines:
         table.caption = "\n".join(f"Pinned: {line}" for line in pinned_lines)
     if not ranked:
-        table.add_row("—", "0", "0", " " * BAR_WIDTH, "")
+        table.add_row(Text("listening… no traffic yet", style="dim"), "", "", "", " " * BAR_WIDTH, "")
     return table
 
 
-def render_telemetry(telemetry: Dict) -> Table:
-    """Render the telemetry snapshot (velocity, protocol mix, counters)."""
+def render_telemetry(
+    telemetry: Dict,
+    sparkline: Optional[List] = None,
+) -> Table:
+    """Render the telemetry snapshot (velocity, protocol mix, counters).
+
+    ``sparkline`` is an optional list of ``(pps, bps)`` samples collected by
+    the Dashboard between refresh ticks; it renders as two history rows.
+    """
     table = Table(
         header_style="bold magenta",
         expand=True,
@@ -194,22 +226,42 @@ def render_telemetry(telemetry: Dict) -> Table:
     )
     rows = [
         ("Packets/sec", f"{telemetry.get('packets_per_sec', 0.0):,.1f}"),
-        ("Bytes/sec", f"{telemetry.get('bytes_per_sec', 0.0):,.1f}"),
-        ("Avg packet size", f"{telemetry.get('avg_packet_size', 0.0):.1f} B"),
+        ("Bytes/sec", f"{_fmt_bytes(telemetry.get('bytes_per_sec', 0.0))}/s"),
+        ("Avg packet size", _fmt_bytes(telemetry.get('avg_packet_size', 0.0))),
         ("Protocol mix", mix_text or "—"),
         ("Unique hosts", f"{telemetry.get('unique_hosts', 0):,}"),
         ("Total packets", f"{telemetry.get('total_packets', 0):,}"),
-        ("Total bytes", f"{telemetry.get('total_bytes', 0):,}"),
+        ("Total bytes", _fmt_bytes(telemetry.get('total_bytes', 0))),
         ("Dropped", f"{telemetry.get('dropped_packets', 0):,}"),
         ("Alerts", f"{telemetry.get('alerts_total', 0):,}"),
     ]
+    if sparkline:
+        pps_max = max((p for p, _ in sparkline), default=0.0)
+        bps_max = max((b for _, b in sparkline), default=0.0)
+        pps_bar = "".join(
+            BAR_CHARS[min(len(BAR_CHARS) - 1, int(p / pps_max * (len(BAR_CHARS) - 1)))] if pps_max and p else " "
+            for p, _ in sparkline
+        )
+        bps_bar = "".join(
+            BAR_CHARS[min(len(BAR_CHARS) - 1, int(b / bps_max * (len(BAR_CHARS) - 1)))] if bps_max and b else " "
+            for _, b in sparkline
+        )
+        rows.append(("pp/s history", Text(pps_bar, style="cyan")))
+        rows.append(("B/s history", Text(bps_bar, style="magenta")))
     for metric, value in rows:
         table.add_row(metric, value)
     return table
 
 
-def render_alerts(alerts: List[AlertEvent]) -> Table:
-    """Render the alert buffer, colour-mapped by severity with dual-coding."""
+def render_alerts(
+    alerts: List[AlertEvent],
+    min_severity: Optional[str] = None,
+) -> Table:
+    """Render the alert buffer, colour-mapped by severity with dual-coding.
+
+    ``min_severity`` filters: ``"warn"`` shows warn+critical; ``"critical"``
+    shows only critical alerts.
+    """
     table = Table(
         header_style="bold red",
         expand=True,
@@ -219,8 +271,12 @@ def render_alerts(alerts: List[AlertEvent]) -> Table:
     table.add_column("Severity", no_wrap=True)
     table.add_column("Kind", no_wrap=True)
     table.add_column("Summary")
+    floor = _SEVERITY_LEVEL.get(min_severity) if min_severity else None
+    shown = 0
     for alert in reversed(alerts):
         sev_key = alert.severity.lower()
+        if floor is not None and _SEVERITY_LEVEL.get(sev_key, 0) < floor:
+            continue
         badge = SEVERITY_BADGES.get(sev_key, alert.severity)
         style = SEVERITY_STYLES.get(sev_key, "white")
         table.add_row(
@@ -229,6 +285,14 @@ def render_alerts(alerts: List[AlertEvent]) -> Table:
             alert.kind,
             alert.summary,
         )
+        shown += 1
+    if not shown:
+        placeholder = (
+            "no critical alerts" if min_severity == "critical"
+            else "listening… no alerts yet"
+        )
+        table.add_row(Text("—", style="dim"), "", "",
+                      Text(placeholder, style="dim"))
     return table
 
 
@@ -238,8 +302,15 @@ def render_host_inspector(
     flow_data: Optional[Dict],
     tags: List[str],
     alerts: List[AlertEvent],
+    ports_contacted: Optional[List[int]] = None,
+    proto_mix: Optional[Dict[str, int]] = None,
+    first_seen: Optional[float] = None,
 ) -> Table:
-    """Render a deep-dive inspection table for a selected host."""
+    """Render a deep-dive inspection table for a selected host.
+
+    ``ports_contacted`` / ``proto_mix`` / ``first_seen`` are derived from the
+    stream buffer by the dashboard; all are optional.
+    """
     table = Table(
         title=f"Host Inspection: {ip}",
         header_style="bold cyan",
@@ -257,8 +328,10 @@ def render_host_inspector(
 
     table.add_row("Host IP", ip)
     table.add_row("Tags", tag_str)
+    if first_seen is not None:
+        table.add_row("First Seen", _fmt_time(first_seen))
     table.add_row("Total Packets", f"{pkts:,}")
-    table.add_row("Total Volume", f"{bytes_val:,} bytes")
+    table.add_row("Total Volume", _fmt_bytes(bytes_val))
     table.add_row("Last Active", last_str)
 
     if flow_data:
@@ -266,6 +339,22 @@ def render_host_inspector(
         table.add_row("Active Flow", flow_str)
     else:
         table.add_row("Active Flow", "no active flow recorded")
+
+    if ports_contacted:
+        shown = ports_contacted[-12:]
+        more = len(ports_contacted) - len(shown)
+        suffix = f" (+{more} more)" if more > 0 else ""
+        table.add_row(
+            "Ports Contacted",
+            ", ".join(str(p) for p in shown) + suffix,
+        )
+    if proto_mix:
+        mix_str = ", ".join(
+            f"{proto.upper()} {count:,}"
+            for proto, count in sorted(proto_mix.items(), key=lambda kv: -kv[1])
+            if count
+        )
+        table.add_row("Protocol Mix (buffer)", mix_str or "—")
 
     host_alerts = [a for a in alerts if a.src == ip or a.dst == ip]
     if host_alerts:
@@ -275,5 +364,34 @@ def render_host_inspector(
         table.add_row("Related Alerts", "none")
 
     table.caption = "Press Enter or Esc to return to dashboard"
+    return table
+
+
+def render_help(enable_kill: bool = False) -> Table:
+    """The dismissible full-screen key-reference overlay."""
+    lines = [
+        ("q", "quit"),
+        ("↑/↓, j, C-n", "select talker (C-p selects up)"),
+        ("Space", "freeze / resume stream"),
+        ("m", "toggle sort metric (bytes/pkts)"),
+        ("1-4, Tab, 0", "zoom panes / show all"),
+        ("Enter", "inspect selected host (Enter/Esc closes)"),
+        ("p", "pin / unpin selected host"),
+        ("t / T", "add / remove tag on selected host"),
+        ("!", "cycle alert severity filter (all → warn+ → critical)"),
+        ("Esc", "close overlay · clear selection · cancel prompt"),
+    ]
+    if enable_kill:
+        lines.append(("k, x", "scoped kill of selected host's flow (confirm y/n)"))
+    table = Table(
+        title="Help — press any key to close",
+        header_style="bold cyan",
+        expand=True,
+        box=None,
+    )
+    table.add_column("Key", style="bold cyan", no_wrap=True)
+    table.add_column("Action")
+    for key, action in lines:
+        table.add_row(key, action)
     return table
 

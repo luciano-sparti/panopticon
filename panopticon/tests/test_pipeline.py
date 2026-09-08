@@ -91,7 +91,7 @@ def test_worker_feeds_detector_synchronously():
 def test_engine_without_detectors_is_noop():
     store = StateStore()
     engine = DetectorEngine(store)
-    assert engine.process_event(ev(0.0)) is None
+    assert engine.process_event(ev(0.0)) == []
     assert engine.prune(now=0.0) == 0
 
 
@@ -209,6 +209,44 @@ def test_worker_export_alerts_to_alert_writer(tmp_path):
     assert first["kind"] == "high_port"
     assert first["summary"] == "connection to high/registered destination port 50000"
     assert store.snapshot_telemetry()["alerts_total"] == 1
+
+
+def test_worker_exports_all_alerts_per_packet(tmp_path):
+    q = queue.Queue()
+    store = StateStore()
+    alert_path = tmp_path / "alerts.jsonl"
+
+    class KindADetector(BaseDetector):
+        engine_cooldown = 0.0
+
+        def process_event(self, event, now, raw=None):
+            return AlertEvent(time=event.timestamp, severity="warn",
+                              kind="kind_a", summary="a", src=event.src,
+                              dst=event.dst)
+
+    class KindBDetector(BaseDetector):
+        engine_cooldown = 0.0
+
+        def process_event(self, event, now, raw=None):
+            return AlertEvent(time=event.timestamp, severity="warn",
+                              kind="kind_b", summary="b", src=event.src,
+                              dst=event.dst)
+
+    worker = PipelineWorker(
+        q,
+        store,
+        detector=DetectorEngine(store, detectors=[KindADetector(), KindBDetector()]),
+        alert_exporter=AlertExportWriter(str(alert_path)),
+    )
+    q.put((b"\x00" * 60, ev(0.0)))
+    worker.drain()
+    worker.flush()
+
+    lines = alert_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    kinds = {json.loads(line)["kind"] for line in lines}
+    assert kinds == {"kind_a", "kind_b"}
+    assert store.snapshot_telemetry()["alerts_total"] == 2
 
 
 def test_worker_alert_exporter_errors_are_contained(tmp_path):

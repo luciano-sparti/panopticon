@@ -33,7 +33,7 @@ def alert(t, src="10.0.0.1"):
 def test_engine_runs_all_detectors():
     a, b = FixedDetector(alert(0.0)), FixedDetector(alert(0.0))
     engine = DetectorEngine(StateStore(), detectors=[a, b])
-    assert engine.process_event(object(), 1.0) is not None
+    assert engine.process_event(object(), 1.0) != []
     assert a.calls == 1 and b.calls == 1
 
 
@@ -44,10 +44,21 @@ def test_engine_registers_detectors():
     assert len(engine.detectors()) == 1
 
 
+def test_engine_returns_all_alerts_per_event():
+    a = FixedDetector(alert(0.0))
+    b = FixedDetector(AlertEvent(time=0.0, severity="critical", kind="other",
+                                 summary="synthetic", src="10.0.0.1",
+                                 dst="8.8.8.8"))
+    engine = DetectorEngine(StateStore(), detectors=[a, b])
+    alerts = engine.process_event(object(), 1.0)
+    assert len(alerts) == 2
+    assert {al.kind for al in alerts} == {"fixed", "other"}
+
+
 def test_engine_pushes_alerts_into_store():
     store = StateStore()
     engine = DetectorEngine(store, detectors=[FixedDetector(alert(0.0))])
-    assert engine.process_event(object(), 1.0) is not None
+    assert engine.process_event(object(), 1.0) != []
     alerts = store.snapshot_alerts()
     assert len(alerts) == 1
     assert alerts[0].kind == "fixed"
@@ -61,13 +72,13 @@ def test_engine_dedup_keyed_by_kind_and_src():
         detectors=[FixedDetector(alert(0.0))],
         cooldown=30.0,
     )
-    assert engine.process_event(object(), 1.0) is not None
+    assert engine.process_event(object(), 1.0) != []
     # Same kind + src within cooldown: suppressed.
-    assert engine.process_event(object(), 2.0) is None
+    assert engine.process_event(object(), 2.0) == []
     assert len(store.snapshot_alerts()) == 1
     # Same kind, different src: allowed.
     engine.register(FixedDetector(alert(0.0, src="10.0.0.2")))
-    assert engine.process_event(object(), 3.0) is not None
+    assert engine.process_event(object(), 3.0) != []
     assert len(store.snapshot_alerts()) == 2
 
 
@@ -78,8 +89,8 @@ def test_engine_cooldown_zero_disables_dedup():
         detectors=[FixedDetector(alert(0.0), engine_cooldown=0.0)],
         cooldown=30.0,
     )
-    assert engine.process_event(object(), 1.0) is not None
-    assert engine.process_event(object(), 2.0) is not None
+    assert engine.process_event(object(), 1.0) != []
+    assert engine.process_event(object(), 2.0) != []
     assert len(store.snapshot_alerts()) == 2
 
 
@@ -93,7 +104,7 @@ def test_engine_uses_event_timestamp_when_now_missing():
     from panopticon.core.event import PacketEvent
 
     event = PacketEvent(5.0, "a", "b", "tcp", 1, 80, 100, "http")
-    assert engine.process_event(event) is not None
+    assert engine.process_event(event) != []
 
 
 def test_engine_prune_delegates_to_detectors():

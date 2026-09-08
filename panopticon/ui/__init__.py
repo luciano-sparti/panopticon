@@ -5,12 +5,13 @@ dashboard, the non-blocking keyboard watcher, and the interactive key
 controls (selector, pin, tag, kill) that drive the dashboard footer.
 """
 
-from .dashboard import Dashboard, build_dashboard, build_layout
+from .dashboard import Dashboard, build_dashboard, build_layout, render_header
 from .keyboard import KeyboardWatcher
 from .keys import PINNED_TAG, UIControls, legend_text
 from .tables import (
     SEVERITY_BADGES,
     render_alerts,
+    render_help,
     render_host_inspector,
     render_stream_table,
     render_telemetry,
@@ -27,6 +28,8 @@ __all__ = [
     "build_layout",
     "legend_text",
     "render_alerts",
+    "render_help",
+    "render_header",
     "render_host_inspector",
     "render_stream_table",
     "render_telemetry",

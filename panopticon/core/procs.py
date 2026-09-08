@@ -11,7 +11,7 @@ immune to the inode-column layout changing between kernel versions.
 from __future__ import annotations
 
 import os
-from typing import Iterable, List, Set
+from typing import Iterable, List, Optional, Set
 
 # Header token of every /proc/net/{tcp,udp,tcp6,udp6} table.
 _HEADER = "sl"

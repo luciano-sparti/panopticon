@@ -130,10 +130,11 @@ class PipelineWorker(threading.Thread):
     def _process(self, raw: bytes, event: PacketEvent) -> None:
         """Record, detect, and export a single packet."""
         self._store.update(event)
-        alert = self._detector.process_event(event, None, raw)
-        if alert is not None and self._alert_exporter is not None:
+        alerts = self._detector.process_event(event, None, raw)
+        if alerts and self._alert_exporter is not None:
             try:
-                self._alert_exporter.write_alert(alert)
+                for alert in alerts:
+                    self._alert_exporter.write_alert(alert)
             except Exception as exc:  # noqa: BLE001 - contained, see #9
                 self._record_error(exc)
         for exporter in self._exporters:

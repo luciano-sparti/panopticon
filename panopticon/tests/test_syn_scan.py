@@ -110,17 +110,17 @@ def test_engine_enforces_per_source_cooldown():
     )
     engine.process_event(syn(0.0, 0), 0.0)
     engine.process_event(syn(0.0, 1), 0.0)
-    alert = engine.process_event(syn(0.0, 2), 0.0)
-    assert alert is not None and alert.kind == "syn_scan"
+    alerts = engine.process_event(syn(0.0, 2), 0.0)
+    assert alerts and alerts[0].kind == "syn_scan"
     # Immediate re-scan from the same source is suppressed by cooldown.
     engine.process_event(syn(0.0, 3), 0.0)
     engine.process_event(syn(0.0, 4), 0.0)
-    assert engine.process_event(syn(0.0, 5), 0.0) is None
+    assert engine.process_event(syn(0.0, 5), 0.0) == []
     assert len(store.snapshot_alerts()) == 1
     # After the cooldown elapses a fresh scan alerts again.
     engine.process_event(syn(31.0, 0), 31.0)
     engine.process_event(syn(31.0, 1), 31.0)
-    assert engine.process_event(syn(31.0, 2), 31.0) is not None
+    assert engine.process_event(syn(31.0, 2), 31.0) != []
     assert len(store.snapshot_alerts()) == 2
 
 
@@ -133,7 +133,7 @@ def test_distinct_sources_alert_independently():
     e2 = PacketEvent(0.0, "b", "8.8.8.9", "tcp", 1, 10001, 60, "", "S")
     e3 = PacketEvent(0.0, "a", "8.8.8.10", "tcp", 1, 10002, 60, "", "S")
     e4 = PacketEvent(0.0, "b", "8.8.8.11", "tcp", 1, 10003, 60, "", "S")
-    assert engine.process_event(e1, 0.0) is None
-    assert engine.process_event(e2, 0.0) is None
-    assert engine.process_event(e3, 0.0) is not None
-    assert engine.process_event(e4, 0.0) is not None
+    assert engine.process_event(e1, 0.0) == []
+    assert engine.process_event(e2, 0.0) == []
+    assert engine.process_event(e3, 0.0) != []
+    assert engine.process_event(e4, 0.0) != []

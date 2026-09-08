@@ -209,6 +209,11 @@ class StateStore:
         with self._lock:
             return set(self._tags.get(ip, ()))
 
+    def self_ips(self) -> Set[str]:
+        """Snapshot of this host's own IPs (for stream direction markers)."""
+        with self._lock:
+            return set(self._self_ips)
+
     def snapshot_flow(self, ip: str) -> Optional[Dict]:
         """Last known flow for a remote ``ip``, or ``None``.
 

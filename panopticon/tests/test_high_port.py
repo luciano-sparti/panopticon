@@ -76,8 +76,8 @@ def test_engine_does_not_collapse_flows():
         detectors=[HighPortDetector()],
         cooldown=30.0,
     )
-    assert engine.process_event(ev(0.0, 50000, dst="1.1.1.1"), 0.0) is not None
-    assert engine.process_event(ev(1.0, 51000, dst="2.2.2.2"), 1.0) is not None
+    assert engine.process_event(ev(0.0, 50000, dst="1.1.1.1"), 0.0) != []
+    assert engine.process_event(ev(1.0, 51000, dst="2.2.2.2"), 1.0) != []
     assert len(store.snapshot_alerts()) == 2
 
 
@@ -88,6 +88,6 @@ def test_engine_respects_internal_flow_cooldown():
         detectors=[HighPortDetector(cooldown=300.0)],
         cooldown=30.0,
     )
-    assert engine.process_event(ev(0.0, 50000), 0.0) is not None
-    assert engine.process_event(ev(10.0, 50000), 10.0) is None
+    assert engine.process_event(ev(0.0, 50000), 0.0) != []
+    assert engine.process_event(ev(10.0, 50000), 10.0) == []
     assert len(store.snapshot_alerts()) == 1

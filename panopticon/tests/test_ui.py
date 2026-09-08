@@ -25,13 +25,14 @@ from panopticon.ui import (
     build_layout,
     legend_text,
     render_alerts,
+    render_header,
     render_stream_table,
     render_telemetry,
     render_top_talkers,
 )
 from panopticon.ui.dashboard import render_footer
 from panopticon.ui.keys import PINNED_TAG
-from panopticon.ui.tables import SEVERITY_STYLES, rank_talkers
+from panopticon.ui.tables import SEVERITY_STYLES, _fmt_bytes, rank_talkers
 
 
 def ev(ts, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
@@ -454,10 +455,141 @@ def test_k_confirm_n_aborts(monkeypatch):
     assert sent == []
 
 
-def test_help_key_shows_legend_status():
+def test_help_key_toggles_overlay():
     controls = UIControls(_talker_store())
+    assert not controls.help_visible
     controls.feed(b"?")
-    assert "q quit" in controls.status
+    assert controls.help_visible
+    # Any other key dismisses the overlay without acting underneath.
+    controls.feed(b"p")
+    assert not controls.help_visible
+    assert controls.status == ""  # pin did NOT fire while overlay open
+
+
+def test_help_overlay_renders_in_layout():
+    store = _talker_store()
+    controls = UIControls(store)
+    controls.selected_ip = "10.0.0.1"
+    controls.help_visible = True
+    layout = build_layout(store, controls=controls)
+    assert layout.get("help") is not None
+    text = render_text(layout["help"])
+    assert "Help" in text and "quit" in text
+    # Footer legend still available underneath.
+    assert "q quit" in render_text(layout["footer"])
+
+
+def test_esc_closes_help_then_clears_selection():
+    store = _talker_store()
+    controls = UIControls(store)
+    controls.selected_ip = "10.0.0.1"
+    controls.help_visible = True
+    controls.feed(b"\x1b")  # lone Esc arrives as its own chunk
+    assert controls.help_visible is False
+    assert controls.selected_ip == "10.0.0.1"  # first Esc closes overlay
+    controls.feed(b"\x1b")
+    assert controls.selected_ip is None  # second Esc clears selection
+
+
+def test_ctrl_n_p_move_selection():
+    store = populated_store()
+    controls = UIControls(store)
+    controls.feed(b"\x0e")  # Ctrl+N -> down -> first talker
+    first = controls.selected_ip
+    assert first is not None
+    controls.feed(b"\x10")  # Ctrl+P -> up -> back to none-selected position
+    assert controls.selected_ip == first  # clamped at top edge
+
+
+def test_alert_filter_cycles_and_filters():
+    controls = UIControls(populated_store())
+    assert controls.alert_filter is None
+    controls.feed(b"!")
+    assert controls.alert_filter == "warn"
+    controls.feed(b"!")
+    assert controls.alert_filter == "critical"
+    controls.feed(b"!")
+    assert controls.alert_filter is None
+
+
+def test_render_alerts_min_severity_filter():
+    alerts = populated_store().snapshot_alerts()
+    text_all = render_text(render_alerts(alerts))
+    assert "syn_scan" in text_all and "plaintext" in text_all
+    crit_only = render_text(render_alerts(alerts, min_severity="critical"))
+    assert "plaintext" in crit_only and "syn_scan" not in crit_only
+    empty_crit = render_text(render_alerts([], min_severity="critical"))
+    assert "no critical alerts" in empty_crit
+
+
+def test_fmt_bytes_humanized():
+    assert _fmt_bytes(0) == "0 B"
+    assert _fmt_bytes(512) == "512 B"
+    assert _fmt_bytes(2048) == "2.0 KiB"
+    assert _fmt_bytes(5 * 1024 * 1024) == "5.0 MiB"
+
+
+def test_top_talkers_rates_and_peak_params():
+    store = populated_store()
+    table = render_top_talkers(
+        store.snapshot_talkers(),
+        rates={"10.0.0.5": 1024.0},
+        bar_peak=1000,
+    )
+    text = render_text(table)
+    assert "Rate" in text
+    assert "1.0 KiB/s" in text
+
+
+def test_header_renders_capture_context():
+    header = render_header(
+        capture_info={"interface": "eno1", "filter": "tcp", "uptime": 3720},
+        view_name="all panes",
+        paused=False,
+    )
+    text = render_text(header)
+    assert "iface eno1" in text and "filter 'tcp'" in text
+    assert "up 01:02:00" in text and "LIVE" in text
+    frozen = render_text(render_header(paused=True))
+    assert "FROZEN" in frozen
+
+
+def test_layout_has_header_region():
+    layout = build_layout(_talker_store(), controls=None)
+    assert layout.get("header") is not None
+    assert "panopticon" in render_text(layout["header"])
+
+
+def test_inspector_shows_ports_protocols_first_seen():
+    from panopticon.core.event import PacketEvent
+
+    store = StateStore()
+    for i, (src, dst, dport, proto) in enumerate([
+        ("10.9.9.9", "8.8.8.8", 443, "tcp"),
+        ("10.9.9.9", "8.8.4.4", 53, "udp"),
+        ("8.8.8.8", "10.9.9.9", 50000, "tcp"),
+    ]):
+        store.update(PacketEvent(float(i), src, dst, proto, 40000 + i,
+                                 dport if dst != "10.9.9.9" else 12345,
+                                 100, ""))
+    controls = UIControls(store)
+    controls.inspecting_ip = "10.9.9.9"
+    layout = build_layout(store, controls=controls)
+    text = render_text(layout["inspector"], width=160)
+    assert "First Seen" in text
+    assert "Ports Contacted" in text
+    assert "Protocol Mix" in text
+
+
+def test_dashboard_derives_rates_sparkline_and_uptime():
+    store = _talker_store()
+    controls = UIControls(store)
+    dash = build_dashboard(store, refresh_per_second=10, controls=controls)
+    dash.render()  # baseline tick
+    store.update(ev(99.0, src="10.0.0.1", size=10000))
+    dash.render()  # delta tick -> rate derived
+    assert dash._spark, "sparkline should collect samples after two ticks"
+    assert dash._peak >= 0
 
 
 # ----------------------------------------------------------------------

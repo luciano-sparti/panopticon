@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import os
 import signal
+import threading
 import time
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from panopticon.core.procs import local_pids_for_port
 
@@ -22,11 +23,24 @@ from .tables import DEFAULT_TOP_TALKERS, rank_talkers
 _KEY_UP = b"\x1b[A"
 _KEY_DOWN = b"\x1b[B"
 
+# Control-key alternates for ↑/↓ (k is taken by kill).
+_KEY_CTRL_P = b"\x10"
+_KEY_CTRL_N = b"\x0e"
+
 # Status messages auto-expire after this many seconds.
 STATUS_TTL = 4.0
 
 # The tag namespace used by the pin toggle.
 PINNED_TAG = "pinned"
+
+# Zoom/view-mode id -> display name (single source of truth).
+VIEW_MODE_NAMES: Dict[int, str] = {
+    0: "all panes",
+    1: "stream",
+    2: "talkers",
+    3: "alerts",
+    4: "telemetry",
+}
 
 
 def legend_text(enable_kill: bool = False) -> str:
@@ -79,6 +93,9 @@ class UIControls:
         self.enable_kill = enable_kill
         self._top_n = top_n
         self._kill_resolver = kill_resolver or default_kill_resolver
+        # RLock: feed() (keyboard thread) mutates while the render thread
+        # reads the properties below; compound ops must not tear.
+        self._lock = threading.RLock()
         self.selected_ip: Optional[str] = None
         self.prompt: Optional[dict] = None
         self.status = ""
@@ -86,8 +103,11 @@ class UIControls:
         self._esc: Optional[bytes] = None
         self.paused: bool = False
         self.metric: str = "bytes"
-        self.view_mode: int = 0  # 0=all, 1=stream, 2=talkers, 3=alerts, 4=telemetry
+        self.view_mode: int = 0  # see VIEW_MODE_NAMES
         self.inspecting_ip: Optional[str] = None
+        self.help_visible: bool = False
+        # Alert severity filter: None=all, "warn"=warn+critical, "critical".
+        self.alert_filter: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Key input
@@ -97,26 +117,32 @@ class UIControls:
         """Process a chunk of raw key bytes (from the keyboard watcher)."""
         if not data:
             return
-        for byte in data:
-            b = bytes([byte])
-            if self._esc is not None:
-                self._esc += b
-                if len(self._esc) == 3:
-                    seq = self._esc
-                    self._esc = None
-                    self._on_escape(seq)
-                elif len(self._esc) > 3:
-                    self._esc = None
-                continue
-            if b == b"\x1b":
-                self._esc = b
-                continue
-            self._on_key(b)
+        with self._lock:
+            for byte in data:
+                b = bytes([byte])
+                if self._esc is not None:
+                    self._esc += b
+                    if len(self._esc) == 3:
+                        seq = self._esc
+                        self._esc = None
+                        self._on_escape(seq)
+                    elif len(self._esc) > 3:
+                        self._esc = None
+                    continue
+                if b == b"\x1b":
+                    self._esc = b
+                    continue
+                self._on_key(b)
+            # A lone ESC usually arrives as its own read chunk; flush it as
+            # an Esc keypress instead of leaving it pending forever.
+            if self._esc == b"\x1b":
+                self._esc = None
+                self._on_key(b"\x1b")
 
     def _on_escape(self, seq: bytes) -> None:
-        if seq == _KEY_UP:
+        if seq == _KEY_UP or seq == _KEY_CTRL_P:
             self._move_selection(-1)
-        elif seq == _KEY_DOWN:
+        elif seq == _KEY_DOWN or seq == _KEY_CTRL_N:
             self._move_selection(1)
 
     def _on_key(self, b: bytes) -> None:
@@ -124,20 +150,37 @@ class UIControls:
             self._on_prompt_key(b)
             return
 
-        if b == b"q":
-            return  # quit is handled by the watcher setting the stop event
-
+        # Overlays first: ? toggles help; Enter/Esc dismiss overlays;
+        # any other key closes help without acting underneath.
+        if b == b"?":
+            self.help_visible = not self.help_visible
+            return
+        if b == b"\x1b":
+            if self.help_visible:
+                self.help_visible = False
+                self._set_status("help closed")
+            elif self.inspecting_ip is not None:
+                self.inspecting_ip = None
+            elif self.selected_ip is not None:
+                self.selected_ip = None
+                self._set_status("selection cleared")
+            return
         if b in (b"\r", b"\n"):
             if self.inspecting_ip is not None:
                 self.inspecting_ip = None
             elif self.selected_ip:
                 self.inspecting_ip = self.selected_ip
             return
-
-        if self.inspecting_ip is not None:
-            # Any non-quit key exits inspection mode
-            self.inspecting_ip = None
+        if self.help_visible and b != b"q":
+            # Any key dismisses the help overlay (q still quits via watcher).
+            self.help_visible = False
             return
+        if self.inspecting_ip is not None:
+            # Only Enter/Esc leave inspection mode; other keys are inert.
+            return
+
+        if b == b"q":
+            return  # quit is handled by the watcher setting the stop event
 
         if b == b" ":
             self.paused = not self.paused
@@ -147,14 +190,22 @@ class UIControls:
             self._set_status(f"talkers sorted by {self.metric}")
         elif b in (b"0", b"1", b"2", b"3", b"4"):
             self.view_mode = int(b.decode("ascii"))
-            names = {0: "all panes", 1: "stream", 2: "talkers", 3: "alerts", 4: "telemetry"}
-            self._set_status(f"view: {names[self.view_mode]}")
+            self._set_status(f"view: {VIEW_MODE_NAMES[self.view_mode]}")
         elif b == b"\t":
-            self.view_mode = (self.view_mode + 1) % 5
-            names = {0: "all panes", 1: "stream", 2: "talkers", 3: "alerts", 4: "telemetry"}
-            self._set_status(f"view: {names[self.view_mode]}")
+            self.view_mode = (self.view_mode + 1) % len(VIEW_MODE_NAMES)
+            self._set_status(f"view: {VIEW_MODE_NAMES[self.view_mode]}")
         elif b == b"j":  # vi-style down
             self._move_selection(1)
+        elif b == _KEY_CTRL_N:
+            self._move_selection(1)
+        elif b == _KEY_CTRL_P:
+            self._move_selection(-1)
+        elif b == b"!":
+            order = (None, "warn", "critical")
+            idx = order.index(self.alert_filter)
+            self.alert_filter = order[(idx + 1) % len(order)]
+            label = {None: "all", "warn": "warn+", "critical": "critical"}[self.alert_filter]
+            self._set_status(f"alert filter: {label}")
         elif b in (b"k", b"K", b"x"):
             self._on_kill()
         elif b == b"p":
@@ -164,8 +215,6 @@ class UIControls:
             self._begin_tag_prompt()
         elif b == b"T":
             self._begin_untag_prompt()
-        elif b == b"?":
-            self._set_status(legend_text(self.enable_kill))
 
     def _on_prompt_key(self, b: bytes) -> None:
         prompt = self.prompt
@@ -178,6 +227,9 @@ class UIControls:
                 self.prompt = None
                 self._set_status("kill aborted")
             return
+        if b == b"\x15":  # Ctrl+U clears the buffer
+            prompt["buffer"] = ""
+            return
         if b == b"\x1b":
             self.prompt = None
             self._set_status("prompt cancelled")
@@ -185,7 +237,12 @@ class UIControls:
         if b in (b"\r", b"\n"):
             self._submit_tag_prompt()
         elif b in (b"\x7f", b"\x08"):
-            prompt["buffer"] = prompt["buffer"][:-1]
+            if not prompt["buffer"]:
+                # Backspace on an empty buffer cancels the prompt.
+                self.prompt = None
+                self._set_status("prompt cancelled")
+            else:
+                prompt["buffer"] = prompt["buffer"][:-1]
         else:
             try:
                 ch = b.decode("utf-8", errors="replace")
@@ -319,27 +376,30 @@ class UIControls:
     @property
     def prompt_text(self) -> str:
         """The inline prompt to render in the footer (empty when idle)."""
-        prompt = self.prompt
-        if prompt is None:
-            return ""
-        if prompt["kind"] == "confirm":
-            pids = ", ".join(str(pid) for pid in prompt["pids"])
-            return (
-                f"kill {prompt['ip']} via local port {prompt['port']} "
-                f"(pid(s) {pids})? [y/n]"
-            )
-        verb = "tag" if prompt["kind"] == "add" else "remove tag"
-        return f"{verb} {prompt['ip']}: {prompt['buffer']}▏"
+        with self._lock:
+            prompt = self.prompt
+            if prompt is None:
+                return ""
+            if prompt["kind"] == "confirm":
+                pids = ", ".join(str(pid) for pid in prompt["pids"])
+                return (
+                    f"kill {prompt['ip']} via local port {prompt['port']} "
+                    f"(pid(s) {pids})? [y/n]"
+                )
+            verb = "tag" if prompt["kind"] == "add" else "remove tag"
+            return f"{verb} {prompt['ip']}: {prompt['buffer']}▏"
 
     @property
     def footer_text(self) -> str:
         """The footer line: active prompt, transient status, or the legend."""
-        if self.prompt is not None:
-            return self.prompt_text
-        if self.status and time.time() < self._status_expires:
-            return self.status
-        return legend_text(self.enable_kill)
+        with self._lock:
+            if self.prompt is not None:
+                return self.prompt_text
+            if self.status and time.time() < self._status_expires:
+                return self.status
+            return legend_text(self.enable_kill)
 
     def _set_status(self, message: str, ttl: float = STATUS_TTL) -> None:
-        self.status = message
-        self._status_expires = time.time() + ttl
+        with self._lock:
+            self.status = message
+            self._status_expires = time.time() + ttl

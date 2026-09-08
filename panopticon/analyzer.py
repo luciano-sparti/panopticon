@@ -179,24 +179,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.tags_file:
         _load_tags(store, args.tags_file)
     packet_queue: queue.Queue = queue.Queue(maxsize=args.queue_size)
+    alert_path = args.export_alerts or ""
+    if not alert_path:
+        pcap_dir = os.path.dirname(os.path.abspath(args.export_pcap))
+        alert_path = os.path.join(pcap_dir, "session.alerts.jsonl")
     try:
         exporters = [
             PcapExportWriter(args.export_pcap),
             CsvExportWriter(args.export_csv),
         ]
+        alert_exporter = AlertExportWriter(alert_path)
     except OSError as exc:
         print(
             f"panopticon: could not open export files "
-            f"({args.export_pcap}, {args.export_csv}): {exc}",
+            f"({args.export_pcap}, {args.export_csv}, {alert_path}): {exc}",
             file=sys.stderr,
         )
         return 2
-
-    alert_path = args.export_alerts or ""
-    if not alert_path:
-        pcap_dir = os.path.dirname(os.path.abspath(args.export_pcap))
-        alert_path = os.path.join(pcap_dir, "session.alerts.jsonl")
-    alert_exporter = AlertExportWriter(alert_path)
     detector = DetectorEngine(
         store,
         detectors=[
@@ -240,6 +239,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     reported_worker_errors = 0
+    drained = 0
 
     def run_loop():
         nonlocal reported_worker_errors
@@ -275,6 +275,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 store,
                 refresh_per_second=ui_refresh_per_second,
                 controls=controls,
+                capture_info={"interface": interface, "filter": args.filter},
             )
             with dashboard:
                 run_loop()
@@ -292,10 +293,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         drained = worker.drain()
         worker.flush()
         for exporter in exporters:
-            exporter.close()
+            try:
+                exporter.close()
+            except Exception as exc:  # noqa: BLE001 - contained, see #9
+                print(
+                    f"panopticon: could not close exporter {type(exporter).__name__}: {exc}",
+                    file=sys.stderr,
+                )
         try:
             alert_exporter.close()
-        except OSError as exc:
+        except Exception as exc:  # noqa: BLE001 - contained, see #9
             print(f"panopticon: could not close alert log {alert_path}: {exc}", file=sys.stderr)
         if args.tags_file:
             _save_tags(store, args.tags_file)

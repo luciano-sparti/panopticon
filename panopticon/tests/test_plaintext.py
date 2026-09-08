@@ -176,10 +176,10 @@ def test_engine_dedups_plaintext_per_source():
         detectors=[PlaintextDetector()],
         cooldown=30.0,
     )
-    assert engine.process_event(ev(1.0), 1.0) is not None
+    assert engine.process_event(ev(1.0), 1.0) != []
     # Same source, different target: suppressed by the 30s cooldown.
-    assert engine.process_event(ev(2.0, dst="9.9.9.9"), 2.0) is None
+    assert engine.process_event(ev(2.0, dst="9.9.9.9"), 2.0) == []
     assert len(store.snapshot_alerts()) == 1
     # A different source alerts independently.
-    assert engine.process_event(ev(3.0, src="10.0.0.2"), 3.0) is not None
+    assert engine.process_event(ev(3.0, src="10.0.0.2"), 3.0) != []
     assert len(store.snapshot_alerts()) == 2

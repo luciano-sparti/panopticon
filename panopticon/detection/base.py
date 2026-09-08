@@ -83,15 +83,15 @@ class DetectorEngine:
         event: PacketEvent,
         now: Optional[float] = None,
         raw: Optional[bytes] = None,
-    ) -> Optional[AlertEvent]:
-        """Run every detector on one event; return the first accepted alert.
+    ) -> List[AlertEvent]:
+        """Run every detector on one event; return all accepted alerts.
 
         Every accepted alert is pushed to the store. Uses ``event.timestamp``
         when ``now`` is omitted so detection stays deterministic on
         synthetic timestamps.
         """
         ts = event.timestamp if now is None else now
-        first: Optional[AlertEvent] = None
+        accepted: List[AlertEvent] = []
         for detector in self._detectors:
             alert = detector.process_event(event, ts, raw)
             if alert is None:
@@ -100,9 +100,8 @@ class DetectorEngine:
                 continue
             if self._store is not None:
                 self._store.add_alert(alert)
-            if first is None:
-                first = alert
-        return first
+            accepted.append(alert)
+        return accepted
 
     def prune(self, now: Optional[float] = None) -> int:
         """Run housekeeping on every detector and the engine dedup map.
