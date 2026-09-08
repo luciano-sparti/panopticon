@@ -26,7 +26,13 @@ import signal
 import sys
 import threading
 
-import tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomli as tomllib
+    except ImportError:  # pragma: no cover
+        tomllib = None
 
 from panopticon import __version__
 from panopticon.capture import Sniffer, auto_detect_interface, preflight, validate_bpf_filter
@@ -204,6 +210,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _load_config(path: str) -> dict:
     """Load a TOML config file; missing/malformed files yield ``{}``."""
+    if tomllib is None:
+        return {}
     try:
         with open(path, "rb") as fh:
             return tomllib.load(fh)

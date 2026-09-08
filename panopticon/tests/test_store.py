@@ -108,7 +108,6 @@ class TestVelocityEWMA:
         assert tele["bytes_per_sec"] == pytest.approx(2e7, rel=1e-3)
         assert tele["avg_packet_size"] == pytest.approx(100.0)
 
-
     def test_initial_velocity_with_injected_clock(self):
         # When created at monotonic t0=100.0, a first flush at t1=100.5 evaluates dt=0.5
         clock = TestClockInjection._FakeMonotonic(100.0)

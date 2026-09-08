@@ -8,6 +8,7 @@ signal handling, and shutdown telemetry.
 import json
 import signal
 
+from panopticon import __version__
 from panopticon.analyzer import _apply_config, _load_tags, _save_tags, build_parser, main
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore

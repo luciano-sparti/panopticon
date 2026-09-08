@@ -9,9 +9,15 @@ raising, so the analyzer never crashes because of the UI.
 
 from __future__ import annotations
 
+import sys
 import time
 from collections import Counter, deque
 from typing import Literal
+
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
 
 from rich.console import Console
 from rich.layout import Layout
@@ -365,7 +371,7 @@ class Dashboard:
             self._live.stop()
             self._live = None
 
-    def __enter__(self) -> Dashboard:
+    def __enter__(self) -> Self:
         self.start()
         return self
 
