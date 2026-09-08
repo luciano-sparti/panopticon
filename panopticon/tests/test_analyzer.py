@@ -130,7 +130,7 @@ def test_version_flag_prints_version_and_exits_zero(capsys):
     except SystemExit as exc:
         assert exc.code == 0
     out, _ = capsys.readouterr()
-    assert "panopticon 0.5.0" in out
+    assert f"panopticon {__version__}" in out
 
 
 def test_new_flags_parse():
