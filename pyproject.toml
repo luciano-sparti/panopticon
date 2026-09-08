@@ -19,7 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "mypy>=1.10.0",
     "pytest>=7.0.0",
+    "ruff>=0.6.0",
 ]
 
 [project.scripts]
@@ -27,3 +29,47 @@ panopticon = "panopticon.analyzer:main"
 
 [tool.setuptools.packages.find]
 include = ["panopticon*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "BLE",
+    "S110",
+    "S112",
+    "SIM",
+    "RET",
+    "PYI",
+    "RUF",
+    "PLE0308",
+    "PLR1711",
+    "DTZ006",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Dev smoke harnesses inject the repo root on sys.path before importing scapy.
+"panopticon/tests/_smoke_*.py" = ["E402"]
+# The TUI intentionally uses semantic unicode glyphs (ℹ ⚠ ⛔ ▲ ▼ ↔) for
+# colorblind dual-coding; they are not accidental lookalikes.
+"panopticon/ui/*.py" = ["RUF001"]
+# /proc/net tcp/udp fixtures are deliberately verbatim-width so the parser
+# sees the same column alignment real kernels emit.
+"panopticon/tests/test_procs.py" = ["E501"]
+
+[tool.ruff.format]
+line-ending = "auto"
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

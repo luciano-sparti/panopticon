@@ -35,9 +35,15 @@ safety-net work lands before performance and feature work.
   - `ui/tables.py`: `Set` used but not imported. **Fixed.**
   Verified via `typing.get_type_hints` on both signatures.
 
-- [ ] **7.5 CI + lint/type-check config** (`.github/workflows/ci.yml`,
-  `pyproject.toml`) — pytest matrix, ruff, mypy so regressions like 7.4
-  cannot land silently. *(deferred until repo hosting decided)*
+- [x] **7.5 CI + lint/type-check config** (`.github/workflows/ci.yml`,
+  `pyproject.toml`) — pytest matrix (3.9/3.11/3.13), ruff (lint + format),
+  mypy so regressions like 7.4 cannot land silently. **Done:** CI workflow
+  added; ruff and mypy wired into pyproject (dev extras + config); the
+  codebase was ruff-formatted and all 259 lint findings fixed; all 24 mypy
+  findings fixed. Verifying CI locally also exposed a latent real bug:
+  `PipelineWorker._stop = threading.Event()` shadowed `Thread._stop`, so a
+  worker still running at `join()` crashed with "'Event' object is not
+  callable" (renamed to `_stop_event`).
 
 ## Phase 8 — Performance
 

@@ -42,11 +42,14 @@ def test_inet_table_ignores_unrelated_numeric_fields():
 
 def test_inet_table_ignores_header_and_empty():
     assert procs._inet_table_inodes("", 53, set()) == set()
-    assert procs._inet_table_inodes(
-        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
-        53,
-        {"258"},
-    ) == set()
+    assert (
+        procs._inet_table_inodes(
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+            53,
+            {"258"},
+        )
+        == set()
+    )
 
 
 def test_pids_resolved_from_fake_proc_tree(tmp_path):
@@ -100,4 +103,3 @@ def test_pids_prioritizes_exact_remote_port_flow(tmp_path):
     assert procs.local_pids_for_port(8080, proc_root=proc, remote_port=9999) == [10, 20]
     # Without remote_port, returns all matching local port
     assert procs.local_pids_for_port(8080, proc_root=proc) == [10, 20]
-

@@ -11,17 +11,18 @@ from __future__ import annotations
 
 import time
 from collections import Counter, deque
-from typing import Dict, Optional
+from typing import Literal
 
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
+from typing_extensions import Self
 
 from panopticon.core.store import StateStore
 
-from .keys import UIControls, VIEW_MODE_NAMES, legend_text
+from .keys import VIEW_MODE_NAMES, UIControls, legend_text
 from .tables import (
     DEFAULT_TOP_TALKERS,
     render_alerts,
@@ -48,10 +49,10 @@ def render_footer(text: str) -> Text:
 
 
 def render_header(
-    capture_info: Optional[Dict] = None,
+    capture_info: dict | None = None,
     view_name: str = VIEW_MODE_NAMES[0],
     paused: bool = False,
-    uptime: Optional[float] = None,
+    uptime: float | None = None,
 ) -> Text:
     """One-line capture context: iface, BPF filter, view, state, uptime."""
     header = Text(style="bold")
@@ -66,19 +67,18 @@ def render_header(
     hours, mins = divmod(mins, 60)
     header.append(f" · up {hours:02d}:{mins:02d}:{secs:02d}")
     header.append(" · ")
-    header.append("FROZEN" if paused else "LIVE",
-                  style="bold yellow" if paused else "bold green")
+    header.append("FROZEN" if paused else "LIVE", style="bold yellow" if paused else "bold green")
     return header
 
 
 def build_layout(
     store: StateStore,
     top_n: int = DEFAULT_TOP_TALKERS,
-    controls: Optional[UIControls] = None,
-    stream_events: Optional[list] = None,
-    capture_info: Optional[Dict] = None,
-    rates: Optional[Dict[str, float]] = None,
-    bar_peak: Optional[float] = None,
+    controls: UIControls | None = None,
+    stream_events: list | None = None,
+    capture_info: dict | None = None,
+    rates: dict[str, float] | None = None,
+    bar_peak: float | None = None,
 ) -> Layout:
     """Build the dashboard ``Layout`` and populate it from live snapshots.
 
@@ -123,13 +123,11 @@ def build_layout(
 
     if inspecting_ip:
         # Inspector overlay; per-host extras derived from the stream buffer
-        host_events = [e for e in events
-                       if e.src == inspecting_ip or e.dst == inspecting_ip]
-        ports = sorted({
-            e.dport for e in host_events if e.dst == inspecting_ip and e.dport
-        } | {
-            e.sport for e in host_events if e.src == inspecting_ip and e.sport
-        })
+        host_events = [e for e in events if e.src == inspecting_ip or e.dst == inspecting_ip]
+        ports = sorted(
+            {e.dport for e in host_events if e.dst == inspecting_ip and e.dport}
+            | {e.sport for e in host_events if e.src == inspecting_ip and e.sport}
+        )
         proto_mix = dict(Counter(e.proto for e in host_events))
         first_seen = min((e.timestamp for e in host_events), default=None)
         flow = store.snapshot_flow(inspecting_ip)
@@ -244,7 +242,6 @@ def _finish(layout: Layout, footer: Text, header: Text) -> None:
     layout["header"].update(header)
 
 
-
 class Dashboard:
     """Owns a Rich ``Live`` that re-renders the snapshot layout on a timer.
 
@@ -258,10 +255,10 @@ class Dashboard:
         store: StateStore,
         *,
         refresh_per_second: float = DEFAULT_REFRESH_PER_SECOND,
-        console: Optional[Console] = None,
+        console: Console | None = None,
         top_n: int = DEFAULT_TOP_TALKERS,
-        controls: Optional[UIControls] = None,
-        capture_info: Optional[Dict] = None,
+        controls: UIControls | None = None,
+        capture_info: dict | None = None,
     ) -> None:
         if refresh_per_second <= 0:
             raise ValueError("refresh_per_second must be positive")
@@ -271,13 +268,13 @@ class Dashboard:
         self._console = console if console is not None else Console()
         self._refresh_per_second = refresh_per_second
         self._capture_info = dict(capture_info) if capture_info else {}
-        self._live: Optional[Live] = None
-        self._frozen_stream: Optional[list] = None
-        self._started_at: Optional[float] = None
-        self._prev_talkers: Optional[Dict[str, Dict]] = None
-        self._prev_rates_at: Optional[float] = None
+        self._live: Live | None = None
+        self._frozen_stream: list | None = None
+        self._started_at: float | None = None
+        self._prev_talkers: dict[str, dict] | None = None
+        self._prev_rates_at: float | None = None
         self._peak: float = 0.0
-        self._spark = deque(maxlen=SPARKLEN)
+        self._spark: deque[tuple[float, float]] = deque(maxlen=SPARKLEN)
 
     @property
     def console(self) -> Console:
@@ -292,7 +289,7 @@ class Dashboard:
     def _derive_analytics(self, talkers, telemetry):
         """Per-talker rates, decaying peak, sparkline sample (per tick)."""
         now = time.monotonic()
-        rates: Dict[str, float] = {}
+        rates: dict[str, float] = {}
         if (
             not (self._controls is not None and self._controls.paused)
             and self._prev_talkers is not None
@@ -314,9 +311,7 @@ class Dashboard:
         self._prev_rates_at = now
 
         metric = self._controls.metric if self._controls is not None else "bytes"
-        current_max = max(
-            (stats.get(metric, 0) for stats in talkers.values()), default=0
-        )
+        current_max = max((stats.get(metric, 0) for stats in talkers.values()), default=0)
         self._peak = max(float(current_max), self._peak * PEAK_DECAY)
         return rates
 
@@ -369,11 +364,11 @@ class Dashboard:
             self._live.stop()
             self._live = None
 
-    def __enter__(self) -> "Dashboard":
+    def __enter__(self) -> Self:
         self.start()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+    def __exit__(self, exc_type, exc_val, exc_tb) -> Literal[False]:
         self.stop()
         return False
 
@@ -382,10 +377,10 @@ def build_dashboard(
     store: StateStore,
     *,
     refresh_per_second: float = DEFAULT_REFRESH_PER_SECOND,
-    console: Optional[Console] = None,
+    console: Console | None = None,
     top_n: int = DEFAULT_TOP_TALKERS,
-    controls: Optional[UIControls] = None,
-    capture_info: Optional[Dict] = None,
+    controls: UIControls | None = None,
+    capture_info: dict | None = None,
 ) -> Dashboard:
     """Create a dashboard for ``store`` (snapshots only, no mutation)."""
     return Dashboard(

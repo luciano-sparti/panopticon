@@ -13,7 +13,6 @@ import ipaddress
 import os
 import re
 import socket
-from typing import Set
 
 # The addresses treated as "this machine" by the automatic self-tagging.
 LOOPBACK_IPS = frozenset({"127.0.0.1", "::1"})
@@ -41,7 +40,7 @@ def hostname() -> str:
     return name or "localhost"
 
 
-def _fib_trie_ips(text: str) -> Set[str]:
+def _fib_trie_ips(text: str) -> set[str]:
     """Local IPv4 addresses from a ``/proc/net/fib_trie`` dump.
 
     Every locally-assigned IPv4 address appears as a ``/32 host LOCAL``
@@ -64,7 +63,7 @@ def _fib_trie_ips(text: str) -> Set[str]:
     return ips
 
 
-def _if_inet6_ips(text: str) -> Set[str]:
+def _if_inet6_ips(text: str) -> set[str]:
     """Global/site IPv6 interface addresses from a ``/proc/net/if_inet6`` dump.
 
     Each line is ``addr ifindex prefixlen scope flags name`` with the
@@ -85,9 +84,9 @@ def _if_inet6_ips(text: str) -> Set[str]:
     return ips
 
 
-def _fallback_ips() -> Set[str]:
+def _fallback_ips() -> set[str]:
     """Local IPs discovered via Scapy / socket on platforms without ``/proc``."""
-    ips: Set[str] = set()
+    ips: set[str] = set()
     try:
         from scapy.arch import get_if_addr, get_if_list
 
@@ -96,9 +95,9 @@ def _fallback_ips() -> Set[str]:
                 addr = get_if_addr(iface)
                 if addr and addr not in ("0.0.0.0", "127.0.0.1", "::1"):
                     ips.add(addr)
-            except Exception:
+            except Exception:  # noqa: BLE001, S112 - skip unreadable iface
                 continue
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - scapy-less host degrades gracefully
         pass
 
     try:
@@ -109,26 +108,26 @@ def _fallback_ips() -> Set[str]:
                 ip = str(sockaddr[0])
                 if not ip.startswith("127.") and ip not in ("::1", "0.0.0.0"):
                     ips.add(ip)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - hostname resolution best-effort
         pass
     return ips
 
 
-def resolve_owned_ips() -> Set[str]:
+def resolve_owned_ips() -> set[str]:
     """All of this host's own IPs: non-loopback interface addresses plus
     loopback (``127.0.0.1`` / ``::1``).
 
     First attempts kernel-direct reading via ``/proc``; falls back to
     Scapy/socket interface enumeration on non-Linux platforms without ``/proc``.
     """
-    owned: Set[str] = set(LOOPBACK_IPS)
+    owned: set[str] = set(LOOPBACK_IPS)
     proc_found = False
     for path, parser in (
         ("/proc/net/fib_trie", _fib_trie_ips),
         ("/proc/net/if_inet6", _if_inet6_ips),
     ):
         try:
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 parsed = parser(fh.read())
                 if parsed:
                     owned |= parsed
@@ -138,4 +137,3 @@ def resolve_owned_ips() -> Set[str]:
     if not proc_found:
         owned |= _fallback_ips()
     return owned
-

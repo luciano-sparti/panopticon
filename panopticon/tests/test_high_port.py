@@ -1,15 +1,12 @@
 """High-port detector tests using synthetic events (no root / live capture)."""
 
-import pytest
-
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
 from panopticon.detection.base import DetectorEngine
 from panopticon.detection.high_port import HighPortDetector
 
 
-def ev(t, dport, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
-       sport=1000, service="ephemeral"):
+def ev(t, dport, src="10.0.0.1", dst="8.8.8.8", proto="tcp", sport=1000, service="ephemeral"):
     return PacketEvent(t, src, dst, proto, sport, dport, 100, service)
 
 

@@ -13,7 +13,7 @@ import os
 import signal
 import threading
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable
 
 from panopticon.core.procs import local_pids_for_port
 
@@ -34,7 +34,7 @@ STATUS_TTL = 4.0
 PINNED_TAG = "pinned"
 
 # Zoom/view-mode id -> display name (single source of truth).
-VIEW_MODE_NAMES: Dict[int, str] = {
+VIEW_MODE_NAMES: dict[int, str] = {
     0: "all panes",
     1: "stream",
     2: "talkers",
@@ -62,13 +62,9 @@ def legend_text(enable_kill: bool = False) -> str:
     return " | ".join(parts)
 
 
-
-def default_kill_resolver(
-    ip: str, local_port: int, remote_port: Optional[int] = None
-) -> List[int]:
+def default_kill_resolver(ip: str, local_port: int, remote_port: int | None = None) -> list[int]:
     """Resolve the local PIDs owning a flow (via ``/proc``)."""
     return local_pids_for_port(local_port, remote_port=remote_port)
-
 
 
 class UIControls:
@@ -87,7 +83,7 @@ class UIControls:
         *,
         enable_kill: bool = False,
         top_n: int = DEFAULT_TOP_TALKERS,
-        kill_resolver: Optional[Callable[[str, int], List[int]]] = None,
+        kill_resolver: Callable[..., list[int]] | None = None,
     ) -> None:
         self._store = store
         self.enable_kill = enable_kill
@@ -96,18 +92,18 @@ class UIControls:
         # RLock: feed() (keyboard thread) mutates while the render thread
         # reads the properties below; compound ops must not tear.
         self._lock = threading.RLock()
-        self.selected_ip: Optional[str] = None
-        self.prompt: Optional[dict] = None
+        self.selected_ip: str | None = None
+        self.prompt: dict | None = None
         self.status = ""
         self._status_expires = 0.0
-        self._esc: Optional[bytes] = None
+        self._esc: bytes | None = None
         self.paused: bool = False
         self.metric: str = "bytes"
         self.view_mode: int = 0  # see VIEW_MODE_NAMES
-        self.inspecting_ip: Optional[str] = None
+        self.inspecting_ip: str | None = None
         self.help_visible: bool = False
         # Alert severity filter: None=all, "warn"=warn+critical, "critical".
-        self.alert_filter: Optional[str] = None
+        self.alert_filter: str | None = None
 
     # ------------------------------------------------------------------
     # Key input
@@ -140,9 +136,9 @@ class UIControls:
                 self._on_key(b"\x1b")
 
     def _on_escape(self, seq: bytes) -> None:
-        if seq == _KEY_UP or seq == _KEY_CTRL_P:
+        if seq in (_KEY_UP, _KEY_CTRL_P):
             self._move_selection(-1)
-        elif seq == _KEY_DOWN or seq == _KEY_CTRL_N:
+        elif seq in (_KEY_DOWN, _KEY_CTRL_N):
             self._move_selection(1)
 
     def _on_key(self, b: bytes) -> None:
@@ -194,9 +190,7 @@ class UIControls:
         elif b == b"\t":
             self.view_mode = (self.view_mode + 1) % len(VIEW_MODE_NAMES)
             self._set_status(f"view: {VIEW_MODE_NAMES[self.view_mode]}")
-        elif b == b"j":  # vi-style down
-            self._move_selection(1)
-        elif b == _KEY_CTRL_N:
+        elif b == b"j" or b == _KEY_CTRL_N:  # vi-style down
             self._move_selection(1)
         elif b == _KEY_CTRL_P:
             self._move_selection(-1)
@@ -251,18 +245,16 @@ class UIControls:
             if ch.isprintable():
                 prompt["buffer"] += ch
 
-
     # ------------------------------------------------------------------
     # Selector
     # ------------------------------------------------------------------
 
-    def _ordered_talkers(self) -> List[str]:
+    def _ordered_talkers(self) -> list[str]:
         try:
             talkers = self._store.snapshot_talkers()
         except Exception:  # noqa: BLE001 - store may not be populated/ready
             return []
         return [ip for ip, _ in rank_talkers(talkers, metric=self.metric)][: self._top_n]
-
 
     def _move_selection(self, delta: int) -> None:
         ordered = self._ordered_talkers()
@@ -336,15 +328,11 @@ class UIControls:
             return
         remote_port = flow.get("remote_port")
         try:
-            pids = self._kill_resolver(
-                ip, flow["local_port"], remote_port=remote_port
-            ) or []
+            pids = self._kill_resolver(ip, flow["local_port"], remote_port=remote_port) or []
         except TypeError:
             pids = self._kill_resolver(ip, flow["local_port"]) or []
         if not pids:
-            self._set_status(
-                f"no local process found for {ip} on port {flow['local_port']}"
-            )
+            self._set_status(f"no local process found for {ip} on port {flow['local_port']}")
             return
         self.prompt = {
             "kind": "confirm",
@@ -352,7 +340,6 @@ class UIControls:
             "port": flow["local_port"],
             "pids": pids,
         }
-
 
     def _execute_kill(self, prompt: dict) -> None:
         self.prompt = None
@@ -362,7 +349,7 @@ class UIControls:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 continue
-            except OSError as exc:  # noqa: BLE001 - surface, do not crash
+            except OSError as exc:
                 self._set_status(f"could not kill pid {pid}: {exc}")
                 return
             killed.append(pid)
@@ -382,10 +369,7 @@ class UIControls:
                 return ""
             if prompt["kind"] == "confirm":
                 pids = ", ".join(str(pid) for pid in prompt["pids"])
-                return (
-                    f"kill {prompt['ip']} via local port {prompt['port']} "
-                    f"(pid(s) {pids})? [y/n]"
-                )
+                return f"kill {prompt['ip']} via local port {prompt['port']} (pid(s) {pids})? [y/n]"
             verb = "tag" if prompt["kind"] == "add" else "remove tag"
             return f"{verb} {prompt['ip']}: {prompt['buffer']}▏"
 

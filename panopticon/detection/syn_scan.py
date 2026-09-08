@@ -12,8 +12,6 @@ source's window so a flood cannot re-trigger instantly.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
-
 from ..core.event import AlertEvent, PacketEvent
 from .base import BaseDetector
 
@@ -29,7 +27,7 @@ class SynScanDetector(BaseDetector):
     """Flags sources spraying unresponded SYNs at many distinct targets."""
 
     # Engine dedup keyed by (kind, src) gives the per-source cooldown.
-    engine_cooldown: Optional[float] = None
+    engine_cooldown: float | None = None
 
     def __init__(
         self,
@@ -41,9 +39,9 @@ class SynScanDetector(BaseDetector):
         self._window = window
         self._max_sources = max_sources
         # src -> {(dst, dport): last_syn_ts}; unresponded pending targets.
-        self._pending: Dict[str, Dict[Tuple[str, int], float]] = {}
+        self._pending: dict[str, dict[tuple[str, int], float]] = {}
         # src -> most recent activity timestamp (for LRU eviction).
-        self._source_last: Dict[str, float] = {}
+        self._source_last: dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Event processing
@@ -53,8 +51,8 @@ class SynScanDetector(BaseDetector):
         self,
         event: PacketEvent,
         now: float,
-        raw: Optional[bytes] = None,
-    ) -> Optional[AlertEvent]:
+        raw: bytes | None = None,
+    ) -> AlertEvent | None:
         if event.proto != "tcp":
             return None
         flags = event.flags or ""
@@ -68,7 +66,7 @@ class SynScanDetector(BaseDetector):
             return None
         return None
 
-    def _on_syn(self, event: PacketEvent, now: float) -> Optional[AlertEvent]:
+    def _on_syn(self, event: PacketEvent, now: float) -> AlertEvent | None:
         src = event.src
         self._expire_source(src, now)
         pending = self._pending.setdefault(src, {})
@@ -138,6 +136,6 @@ class SynScanDetector(BaseDetector):
 
     def _evict_sources_if_needed(self) -> None:
         while len(self._pending) > self._max_sources:
-            oldest = min(self._source_last, key=self._source_last.get)
+            oldest = min(self._source_last, key=lambda src: self._source_last[src])
             self._pending.pop(oldest, None)
             self._source_last.pop(oldest, None)

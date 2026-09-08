@@ -10,12 +10,12 @@ is full the frame is counted as dropped instead of blocking capture.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import queue
 import sys
 import threading
 from functools import partial
-from typing import Optional
 
 from scapy.arch import get_if_list
 from scapy.sendrecv import AsyncSniffer
@@ -49,10 +49,11 @@ _PSEUDO_PREFIXES = (
 # Preflight checks (clear abort messages for the CLI)
 # ----------------------------------------------------------------------
 
+
 def _cap_net_raw_enabled() -> bool:
     """True when CAP_NET_RAW is granted to this process (Linux)."""
     try:
-        with open("/proc/self/status", "r", encoding="utf-8") as fh:
+        with open("/proc/self/status", encoding="utf-8") as fh:
             for line in fh:
                 if line.startswith("CapEff:"):
                     cap = int(line.split(":", 1)[1].strip(), 16)
@@ -69,7 +70,7 @@ def _windows_npcap_problem() -> str:
 
         if get_windows_if_list():
             return ""
-    except Exception:
+    except Exception:  # noqa: BLE001, S110 - probe absence is best-effort
         pass
     return (
         "Npcap does not appear to be installed (Windows). Install Npcap "
@@ -105,10 +106,7 @@ def preflight(interface: str) -> str:
     if not ifaces:
         return "no network interfaces found (is libpcap/Npcap installed?)"
     if interface and interface not in ifaces:
-        return (
-            f"interface {interface!r} not found; detected: "
-            + ", ".join(ifaces)
-        )
+        return f"interface {interface!r} not found; detected: " + ", ".join(ifaces)
     return _privilege_problem()
 
 
@@ -127,7 +125,6 @@ def _read_sys_iface_field(name: str, field: str) -> str:
     try:
         with open(
             os.path.join(_SYS_CLASS_NET, name, field),
-            "r",
             encoding="utf-8",
         ) as fh:
             return fh.read().strip()
@@ -171,7 +168,7 @@ def auto_detect_interface() -> str:
     """Pick the first usable non-loopback interface, else ``""``."""
     try:
         ifaces = get_if_list()
-    except Exception:
+    except Exception:  # noqa: BLE001 - enumeration failure falls back to ""
         return ""
     return _select_interface(ifaces)
 
@@ -179,6 +176,7 @@ def auto_detect_interface() -> str:
 # ----------------------------------------------------------------------
 # Queue feeding
 # ----------------------------------------------------------------------
+
 
 def handle_packet(
     packet_queue: queue.Queue,
@@ -209,6 +207,7 @@ def handle_packet(
 # Sniffer wrapper
 # ----------------------------------------------------------------------
 
+
 class Sniffer:
     """Async capture feeding ``(raw_bytes, PacketEvent)`` onto a queue.
 
@@ -221,7 +220,7 @@ class Sniffer:
         interface: str,
         packet_queue: queue.Queue,
         store,
-        bpf_filter: Optional[str] = None,
+        bpf_filter: str | None = None,
     ) -> None:
         self._interface = interface
         self._bpf_filter = bpf_filter or None
@@ -246,7 +245,7 @@ class Sniffer:
         return bool(self._sniffer.running)
 
     @property
-    def exception(self) -> Optional[BaseException]:
+    def exception(self) -> BaseException | None:
         """Capture-thread exception, or ``None`` while capture is healthy.
 
         Scapy's ``AsyncSniffer`` swallows capture errors into this attribute
@@ -272,10 +271,8 @@ class Sniffer:
         """Close the capture socket. Safe to call before the thread runs."""
         if not getattr(self._sniffer, "running", False):
             return
-        try:
+        with contextlib.suppress(Exception):
             self._sniffer.stop()
-        except Exception:  # noqa: BLE001 - best-effort socket close
-            pass
 
-    def join(self, timeout: Optional[float] = None) -> None:
+    def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout)

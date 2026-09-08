@@ -4,6 +4,7 @@ Run via:  python -m panopticon.tests._smoke_parse
 No root required. Builds raw frames with scapy and asserts the parser
 extracts the expected fields, including the 'other'/fallback path.
 """
+
 from __future__ import annotations
 
 import logging
@@ -12,17 +13,22 @@ import logging
 # synthetic frames; these are noise, not failures.
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
-from scapy.all import Ether, IP, TCP, UDP, ICMP, Raw, Padding
+from scapy.all import ICMP, IP, TCP, UDP, Ether, Padding, Raw  # type: ignore[attr-defined]
 
 
 def _build() -> list:
     pkts = []
     # TCP with payload
-    pkts.append(Ether() / IP(src="10.0.0.1", dst="10.0.0.2") /
-                TCP(sport=12345, dport=443, flags="PA") / Raw(b"GET / HTTP/1.1\r\n"))
+    pkts.append(
+        Ether()
+        / IP(src="10.0.0.1", dst="10.0.0.2")
+        / TCP(sport=12345, dport=443, flags="PA")
+        / Raw(b"GET / HTTP/1.1\r\n")
+    )
     # UDP (DNS query on port 53)
-    pkts.append(Ether() / IP(src="10.0.0.3", dst="10.0.0.4") /
-                UDP(sport=5353, dport=53) / Raw(b"query"))
+    pkts.append(
+        Ether() / IP(src="10.0.0.3", dst="10.0.0.4") / UDP(sport=5353, dport=53) / Raw(b"query")
+    )
     # ICMP
     pkts.append(Ether() / IP(src="10.0.0.5", dst="10.0.0.6") / ICMP(type=8, code=0))
     # Corrupt/non-IP frame -> 'other' fallback
@@ -31,8 +37,8 @@ def _build() -> list:
 
 
 def main() -> None:
-    from panopticon.core.parser import parse
     from panopticon.core.event import service_for_port
+    from panopticon.core.parser import parse
 
     assert service_for_port(80) == "http"
     assert service_for_port(22) == "ssh"

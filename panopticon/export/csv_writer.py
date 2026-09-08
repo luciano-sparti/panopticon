@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import csv
 import os
-from typing import Dict, List
 
 from .base import BaseExporter
 
 # Column order for the flow log.
-CSV_FIELDNAMES: List[str] = [
+CSV_FIELDNAMES: list[str] = [
     "ts",
     "src",
     "dst",
@@ -40,7 +39,7 @@ class CsvExportWriter(BaseExporter):
         self._path = path
         self._flush_every = flush_every
         is_new = not os.path.exists(path) or os.path.getsize(path) == 0
-        self._fh = open(path, "a", newline="", encoding="utf-8")
+        self._fh = open(path, "a", newline="", encoding="utf-8")  # noqa: SIM115 - persistent stream handle
         self._writer = csv.DictWriter(self._fh, fieldnames=CSV_FIELDNAMES)
         if is_new:
             self._writer.writeheader()
@@ -52,7 +51,7 @@ class CsvExportWriter(BaseExporter):
         if self._count >= self._flush_every:
             self.flush()
 
-    def _row(self, event) -> Dict[str, object]:
+    def _row(self, event) -> dict[str, object]:
         return {
             "ts": event.timestamp,
             "src": event.src,

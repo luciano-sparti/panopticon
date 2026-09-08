@@ -9,8 +9,6 @@ entry cap, mirroring the top-talker housekeeping in the state store.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
-
 from ..core.event import EPHEMERAL_PORT, AlertEvent, PacketEvent
 from .base import BaseDetector
 
@@ -41,14 +39,14 @@ class HighPortDetector(BaseDetector):
         self._ttl = ttl
         self._max_entries = max_entries
         # (src, dst, dport) -> last alert timestamp.
-        self._last_alert: Dict[Tuple[str, str, int], float] = {}
+        self._last_alert: dict[tuple[str, str, int], float] = {}
 
     def process_event(
         self,
         event: PacketEvent,
         now: float,
-        raw: Optional[bytes] = None,
-    ) -> Optional[AlertEvent]:
+        raw: bytes | None = None,
+    ) -> AlertEvent | None:
         if event.proto not in ("tcp", "udp"):
             return None
         if event.dport < self._threshold:
@@ -84,5 +82,5 @@ class HighPortDetector(BaseDetector):
 
     def _evict_if_needed(self) -> None:
         while len(self._last_alert) > self._max_entries:
-            oldest = min(self._last_alert, key=self._last_alert.get)
+            oldest = min(self._last_alert, key=lambda key: self._last_alert[key])
             del self._last_alert[oldest]

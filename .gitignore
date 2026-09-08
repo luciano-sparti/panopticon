@@ -1,4 +1,6 @@
 # Python
+build/
+dist/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -13,3 +15,4 @@ _smoke_export_out/
 # live-capture export outputs (default session.pcap / session.csv)
 session.pcap
 session.csv
+session.alerts.jsonl

@@ -6,9 +6,9 @@ from .csv_writer import CSV_FIELDNAMES, CsvExportWriter
 from .pcap_writer import PcapExportWriter
 
 __all__ = [
+    "CSV_FIELDNAMES",
     "AlertExportWriter",
     "BaseExporter",
-    "CSV_FIELDNAMES",
     "CsvExportWriter",
     "PcapExportWriter",
 ]

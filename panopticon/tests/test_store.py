@@ -10,8 +10,8 @@ from panopticon.core.store import (
     StateStore,
 )
 
-def ev(timestamp, src="10.0.0.1", dst="10.0.0.2", proto="tcp",
-       sport=1000, dport=80, size=100):
+
+def ev(timestamp, src="10.0.0.1", dst="10.0.0.2", proto="tcp", sport=1000, dport=80, size=100):
     return PacketEvent(timestamp, src, dst, proto, sport, dport, size, "http")
 
 

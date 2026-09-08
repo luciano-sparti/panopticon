@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 
-from .base import BaseExporter
-
 DEFAULT_FLUSH_EVERY = 10
 
 
@@ -22,18 +20,23 @@ class AlertExportWriter:
         self._flush_every = flush_every
         # JSONL has no header; the file is opened in append mode so
         # consecutive runs keep one alert log.
-        self._fh = open(path, "a", encoding="utf-8")
+        self._fh = open(path, "a", encoding="utf-8")  # noqa: SIM115 - persistent stream handle
         self._count = 0
 
     def write_alert(self, alert) -> None:
-        self._fh.write(json.dumps({
-            "time": alert.time,
-            "severity": alert.severity,
-            "kind": alert.kind,
-            "summary": alert.summary,
-            "src": alert.src,
-            "dst": alert.dst,
-        }) + "\n")
+        self._fh.write(
+            json.dumps(
+                {
+                    "time": alert.time,
+                    "severity": alert.severity,
+                    "kind": alert.kind,
+                    "summary": alert.summary,
+                    "src": alert.src,
+                    "dst": alert.dst,
+                }
+            )
+            + "\n"
+        )
         self._count += 1
         if self._count >= self._flush_every:
             self.flush()

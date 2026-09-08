@@ -4,6 +4,7 @@ Run via:  python -m panopticon.tests._smoke_export
 No root required. Writes synthetic frames with the real exporters, then reads
 the files back to confirm they are valid and complete.
 """
+
 from __future__ import annotations
 
 import csv
@@ -15,21 +16,23 @@ import tempfile
 # synthetic frames; these are noise, not failures.
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
-from scapy.all import Ether, IP, TCP, Raw, rdpcap
+from scapy.all import IP, TCP, Ether, Raw, rdpcap  # type: ignore[attr-defined]
 
-from panopticon.core.event import PacketEvent
 from panopticon.core.parser import parse
-from panopticon.export.pcap_writer import PcapExportWriter
 from panopticon.export.csv_writer import CsvExportWriter
+from panopticon.export.pcap_writer import PcapExportWriter
 
 
 def _frames():
     frames = []
     for i in range(5):
         frames.append(
-            bytes(Ether() / IP(src="10.0.0.1", dst="10.0.0.2") /
-                  TCP(sport=12345, dport=443, flags="PA") /
-                  Raw(f"hello {i}".encode()))
+            bytes(
+                Ether()
+                / IP(src="10.0.0.1", dst="10.0.0.2")
+                / TCP(sport=12345, dport=443, flags="PA")
+                / Raw(f"hello {i}".encode())
+            )
         )
     return frames
 
@@ -62,10 +65,10 @@ def main() -> None:
         assert len(rows) == len(frames), f"csv rows: {len(rows)} != {len(frames)}"
         assert rows[0]["dport"] == "443", f"unexpected csv row: {rows[0]}"
 
-        print(f"export smoke OK: pcap={len(pkts)} pkts, csv={len(rows)} rows, "
-              f"files valid")
+        print(f"export smoke OK: pcap={len(pkts)} pkts, csv={len(rows)} rows, files valid")
     finally:
         import shutil
+
         shutil.rmtree(out, ignore_errors=True)
 
 

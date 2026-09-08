@@ -12,7 +12,7 @@ import copy
 import threading
 import time
 from collections import deque
-from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple
+from collections.abc import Iterable
 
 from . import identity
 from .event import AlertEvent, PacketEvent
@@ -43,25 +43,25 @@ class StateStore:
 
     def __init__(
         self,
-        self_ips: Optional[Set[str]] = None,
-        self_host: Optional[str] = None,
+        self_ips: set[str] | None = None,
+        self_host: str | None = None,
     ) -> None:
         self._lock = threading.RLock()
-        self._stream: Deque[PacketEvent] = deque(maxlen=STREAM_MAXLEN)
-        self._alerts: Deque[AlertEvent] = deque(maxlen=ALERTS_MAXLEN)
+        self._stream: deque[PacketEvent] = deque(maxlen=STREAM_MAXLEN)
+        self._alerts: deque[AlertEvent] = deque(maxlen=ALERTS_MAXLEN)
         self._alerts_total = 0
-        self._top_talkers: Dict[str, Dict] = {}
-        self._proto_counts: Dict[str, int] = {p: 0 for p in PROTOCOLS}
+        self._top_talkers: dict[str, dict] = {}
+        self._proto_counts: dict[str, int] = {p: 0 for p in PROTOCOLS}
         self._total_packets = 0
         self._total_bytes = 0
         self._dropped = 0
 
         # IP -> tags. Kept separate from ``_top_talkers`` so tags survive
         # LRU eviction and TTL pruning of a talker's telemetry.
-        self._tags: Dict[str, Set[str]] = {}
+        self._tags: dict[str, set[str]] = {}
         # Remote IP -> (local_port, remote_port, proto) of the last flow.
         # Used to resolve the local process for the scoped kill feature.
-        self._flows: Dict[str, Tuple[int, int, str]] = {}
+        self._flows: dict[str, tuple[int, int, str]] = {}
 
         # Automatic "this machine" tagging (self:<hostname>).
         self._self_ips = (
@@ -99,9 +99,7 @@ class StateStore:
                 if len(self._top_talkers) > MAX_TALKERS:
                     self._evict_lru_talker()
 
-            self._proto_counts[event.proto] = (
-                self._proto_counts.get(event.proto, 0) + 1
-            )
+            self._proto_counts[event.proto] = self._proto_counts.get(event.proto, 0) + 1
 
             if event.src in self._self_ips and event.dst:
                 self._flows[event.dst] = (event.sport, event.dport, event.proto)
@@ -146,7 +144,7 @@ class StateStore:
             if not tags:
                 del self._tags[ip]
 
-    def load_tags(self, mapping: Dict[str, Iterable[str]]) -> None:
+    def load_tags(self, mapping: dict[str, Iterable[str]]) -> None:
         """Bulk-import tags (used by ``--tags-file`` startup loading)."""
         with self._lock:
             for ip, tags in mapping.items():
@@ -163,9 +161,8 @@ class StateStore:
         with self._lock:
             stale = []
             for ip, talker in self._top_talkers.items():
-                if (
-                    ref - talker["last_seen"] > TALKER_TTL
-                    and "pinned" not in self._tags.get(ip, ())
+                if ref - talker["last_seen"] > TALKER_TTL and "pinned" not in self._tags.get(
+                    ip, ()
                 ):
                     stale.append(ip)
             for ip in stale:
@@ -177,17 +174,17 @@ class StateStore:
     # Snapshot API (UI thread) - deep copies, never shared references
     # ------------------------------------------------------------------
 
-    def snapshot_stream(self) -> List[PacketEvent]:
+    def snapshot_stream(self) -> list[PacketEvent]:
         """Deep-copied list of the most recent ``STREAM_MAXLEN`` events."""
         with self._lock:
             return copy.deepcopy(list(self._stream))
 
-    def snapshot_alerts(self) -> List[AlertEvent]:
+    def snapshot_alerts(self) -> list[AlertEvent]:
         """Deep-copied list of the most recent ``ALERTS_MAXLEN`` alerts."""
         with self._lock:
             return copy.deepcopy(list(self._alerts))
 
-    def snapshot_talkers(self) -> Dict[str, Dict]:
+    def snapshot_talkers(self) -> dict[str, dict]:
         """Deep-copied top-talker map with tags merged in.
 
         Each entry: ``{"pkts", "bytes", "last_seen", "tags": [...]}``.
@@ -199,22 +196,22 @@ class StateStore:
                 talker["tags"] = sorted(tags) if tags else []
             return snap
 
-    def snapshot_tags(self) -> Dict[str, List[str]]:
+    def snapshot_tags(self) -> dict[str, list[str]]:
         """Deep-copied tag map: ``{ip: [tags]}`` (for ``--tags-file``)."""
         with self._lock:
             return {ip: sorted(tags) for ip, tags in self._tags.items()}
 
-    def tags_for(self, ip: str) -> Set[str]:
+    def tags_for(self, ip: str) -> set[str]:
         """Deep-copied set of tags currently attached to ``ip``."""
         with self._lock:
             return set(self._tags.get(ip, ()))
 
-    def self_ips(self) -> Set[str]:
+    def self_ips(self) -> set[str]:
         """Snapshot of this host's own IPs (for stream direction markers)."""
         with self._lock:
             return set(self._self_ips)
 
-    def snapshot_flow(self, ip: str) -> Optional[Dict]:
+    def snapshot_flow(self, ip: str) -> dict | None:
         """Last known flow for a remote ``ip``, or ``None``.
 
         Returns ``{"local_port", "remote_port", "proto"}`` where the local
@@ -230,12 +227,14 @@ class StateStore:
                 "proto": flow[2],
             }
 
-    def snapshot_telemetry(self) -> Dict:
+    def snapshot_telemetry(self) -> dict:
         """Deep-copied telemetry summary (velocity, mix, counters)."""
         with self._lock:
             total = self._total_packets or 1
-            mix = {proto: round(100.0 * count / total, 2)
-                   for proto, count in self._proto_counts.items()}
+            mix = {
+                proto: round(100.0 * count / total, 2)
+                for proto, count in self._proto_counts.items()
+            }
             return {
                 "packets_per_sec": round(self._pps, 3),
                 "bytes_per_sec": round(self._bytes_sec, 3),
@@ -266,9 +265,7 @@ class StateStore:
             inst_pps = 1.0 / dt
             inst_bps = size / dt
             self._pps = EWMA_ALPHA * self._pps + EWMA_BETA * inst_pps
-            self._bytes_sec = (
-                EWMA_ALPHA * self._bytes_sec + EWMA_BETA * inst_bps
-            )
+            self._bytes_sec = EWMA_ALPHA * self._bytes_sec + EWMA_BETA * inst_bps
             self._avg_size = EWMA_ALPHA * self._avg_size + EWMA_BETA * size
         else:
             self._avg_size = float(size)

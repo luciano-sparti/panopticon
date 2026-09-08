@@ -15,8 +15,6 @@ Engine-level dedup keyed by ``(kind, src)`` keeps per-source volume bounded.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.inet6 import IPv6
 from scapy.layers.l2 import Ether
@@ -40,7 +38,7 @@ class PlaintextDetector(BaseDetector):
     """Flags unencrypted services and cleartext credential material."""
 
     # Engine dedup keyed by (kind, src).
-    engine_cooldown: Optional[float] = None
+    engine_cooldown: float | None = None
 
     def __init__(
         self,
@@ -54,11 +52,9 @@ class PlaintextDetector(BaseDetector):
         self,
         event: PacketEvent,
         now: float,
-        raw: Optional[bytes] = None,
-    ) -> Optional[AlertEvent]:
-        port_hit = (
-            event.dport in PLAINTEXT_PORTS or event.sport in PLAINTEXT_PORTS
-        )
+        raw: bytes | None = None,
+    ) -> AlertEvent | None:
+        port_hit = event.dport in PLAINTEXT_PORTS or event.sport in PLAINTEXT_PORTS
         marker = self._find_marker(raw, event.proto)
 
         if port_hit and (not self._payload_gate or marker is not None):
@@ -87,17 +83,14 @@ class PlaintextDetector(BaseDetector):
                 time=now,
                 severity=severity,
                 kind="plaintext",
-                summary=(
-                    f"cleartext marker {marker.decode('ascii', 'replace')!r} "
-                    "in payload"
-                ),
+                summary=(f"cleartext marker {marker.decode('ascii', 'replace')!r} in payload"),
                 src=event.src,
                 dst=event.dst,
             )
 
         return None
 
-    def _find_marker(self, raw: Optional[bytes], proto: str) -> Optional[bytes]:
+    def _find_marker(self, raw: bytes | None, proto: str) -> bytes | None:
         """Return the first cleartext marker found in the payload head.
 
         Transport-layer headers are stripped before scanning so scan budget
@@ -117,7 +110,7 @@ class PlaintextDetector(BaseDetector):
         return None
 
 
-def _payload_bytes(raw: bytes) -> Optional[bytes]:
+def _payload_bytes(raw: bytes) -> bytes | None:
     """Return the L4 payload bytes of ``raw``, or ``None`` when no L4 layer.
 
     ``None`` (rather than empty bytes) lets callers distinguish "dissection
@@ -134,14 +127,14 @@ def _payload_bytes(raw: bytes) -> Optional[bytes]:
     return None
 
 
-def _dissect(raw: bytes) -> Optional[Packet]:
+def _dissect(raw: bytes) -> Packet | None:
     """Best-effort dissection of a raw frame down to a transport layer."""
     if not raw:
         return None
     for cls in (Ether, IP, IPv6):
         try:
             pkt = cls(raw)
-        except Exception:  # noqa: BLE001 - corrupt/truncated frames
+        except Exception:  # noqa: BLE001, S112 - corrupt/truncated frames
             continue
         if (
             pkt.getlayer(TCP) is not None

@@ -15,8 +15,10 @@ def make(pkt: Packet, time: float = 1234.5) -> Packet:
 
 def test_tcp_http_parsing():
     pkt = make(
-        Ether() / IP(src="10.0.0.1", dst="8.8.8.8") /
-        TCP(sport=40000, dport=80, flags="S") / Raw(b"GET /"),
+        Ether()
+        / IP(src="10.0.0.1", dst="8.8.8.8")
+        / TCP(sport=40000, dport=80, flags="S")
+        / Raw(b"GET /"),
     )
     ev = parse(pkt)
     assert ev.src == "10.0.0.1"
@@ -31,8 +33,7 @@ def test_tcp_http_parsing():
 
 def test_tcp_ephemeral_dport_maps_to_ephemeral_service():
     pkt = make(
-        Ether() / IP(src="1.2.3.4", dst="5.6.7.8") /
-        TCP(sport=1111, dport=55000, flags="S"),
+        Ether() / IP(src="1.2.3.4", dst="5.6.7.8") / TCP(sport=1111, dport=55000, flags="S"),
     )
     ev = parse(pkt)
     assert ev.dport == 55000
@@ -41,16 +42,14 @@ def test_tcp_ephemeral_dport_maps_to_ephemeral_service():
 
 def test_tcp_known_port_maps_to_service():
     pkt = make(
-        Ether() / IP(src="1.2.3.4", dst="5.6.7.8") /
-        TCP(sport=50000, dport=5432),
+        Ether() / IP(src="1.2.3.4", dst="5.6.7.8") / TCP(sport=50000, dport=5432),
     )
     assert parse(pkt).service == "postgres"
 
 
 def test_udp_dns_parsing():
     pkt = make(
-        Ether() / IP(src="192.168.1.5", dst="9.9.9.9") /
-        UDP(sport=54321, dport=53),
+        Ether() / IP(src="192.168.1.5", dst="9.9.9.9") / UDP(sport=54321, dport=53),
     )
     ev = parse(pkt)
     assert ev.proto == "udp"
@@ -61,8 +60,7 @@ def test_udp_dns_parsing():
 
 def test_icmp_parsing_has_zero_ports():
     pkt = make(
-        Ether() / IP(src="10.0.0.1", dst="10.0.0.2") /
-        ICMP(type=8, code=0),
+        Ether() / IP(src="10.0.0.1", dst="10.0.0.2") / ICMP(type=8, code=0),
     )
     ev = parse(pkt)
     assert ev.proto == "icmp"
@@ -73,8 +71,7 @@ def test_icmp_parsing_has_zero_ports():
 
 def test_ipv6_tcp_parsing():
     pkt = make(
-        IPv6(src="2001:db8::1", dst="2001:db8::2") /
-        TCP(sport=2222, dport=22),
+        IPv6(src="2001:db8::1", dst="2001:db8::2") / TCP(sport=2222, dport=22),
     )
     ev = parse(pkt)
     assert ev.src == "2001:db8::1"
@@ -116,24 +113,21 @@ def test_none_packet_returns_zeroed_event():
 
 def test_tcp_flags_are_parsed():
     pkt = make(
-        Ether() / IP(src="10.0.0.1", dst="8.8.8.8") /
-        TCP(sport=40000, dport=80, flags="S"),
+        Ether() / IP(src="10.0.0.1", dst="8.8.8.8") / TCP(sport=40000, dport=80, flags="S"),
     )
     assert parse(pkt).flags == "S"
 
 
 def test_tcp_syn_ack_flags_are_parsed():
     pkt = make(
-        Ether() / IP(src="8.8.8.8", dst="10.0.0.1") /
-        TCP(sport=80, dport=40000, flags="SA"),
+        Ether() / IP(src="8.8.8.8", dst="10.0.0.1") / TCP(sport=80, dport=40000, flags="SA"),
     )
     assert parse(pkt).flags == "SA"
 
 
 def test_non_tcp_flags_are_empty():
     pkt = make(
-        Ether() / IP(src="10.0.0.1", dst="8.8.8.8") /
-        UDP(sport=50000, dport=53),
+        Ether() / IP(src="10.0.0.1", dst="8.8.8.8") / UDP(sport=50000, dport=53),
     )
     assert parse(pkt).flags == ""
 
@@ -159,16 +153,18 @@ def test_corrupt_transport_layer_recovers_gracefully():
         time = 200.0
 
         def __bytes__(self):
-            return b"\x00" * 40
+            return bytes(40)
 
         def getlayer(self, cls):
             if cls == IP:
                 return IP(src="1.1.1.1", dst="2.2.2.2")
             if cls == TCP:
+
                 class BrokenTCP:
                     @property
                     def sport(self):
                         raise RuntimeError("Broken field")
+
                 return BrokenTCP()
             return None
 
@@ -178,4 +174,3 @@ def test_corrupt_transport_layer_recovers_gracefully():
     assert ev.proto == "tcp"
     assert ev.sport == 0
     assert ev.dport == 0
-

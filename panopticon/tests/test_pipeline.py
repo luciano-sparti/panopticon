@@ -19,8 +19,9 @@ from panopticon.export.pcap_writer import PcapExportWriter
 from panopticon.pipeline import PipelineWorker
 
 
-def ev(timestamp, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
-       sport=1000, dport=80, size=100, flags=""):
+def ev(
+    timestamp, src="10.0.0.1", dst="8.8.8.8", proto="tcp", sport=1000, dport=80, size=100, flags=""
+):
     return PacketEvent(timestamp, src, dst, proto, sport, dport, size, "http", flags)
 
 
@@ -41,7 +42,6 @@ class RecordingDetector(BaseDetector):
     def process_event(self, event, now, raw=None):
         self.seen.append(event)
         self.raws.append(raw)
-        return None
 
 
 class RaisingExporter(BaseExporter):
@@ -220,17 +220,27 @@ def test_worker_exports_all_alerts_per_packet(tmp_path):
         engine_cooldown = 0.0
 
         def process_event(self, event, now, raw=None):
-            return AlertEvent(time=event.timestamp, severity="warn",
-                              kind="kind_a", summary="a", src=event.src,
-                              dst=event.dst)
+            return AlertEvent(
+                time=event.timestamp,
+                severity="warn",
+                kind="kind_a",
+                summary="a",
+                src=event.src,
+                dst=event.dst,
+            )
 
     class KindBDetector(BaseDetector):
         engine_cooldown = 0.0
 
         def process_event(self, event, now, raw=None):
-            return AlertEvent(time=event.timestamp, severity="warn",
-                              kind="kind_b", summary="b", src=event.src,
-                              dst=event.dst)
+            return AlertEvent(
+                time=event.timestamp,
+                severity="warn",
+                kind="kind_b",
+                summary="b",
+                src=event.src,
+                dst=event.dst,
+            )
 
     worker = PipelineWorker(
         q,
@@ -251,11 +261,18 @@ def test_worker_exports_all_alerts_per_packet(tmp_path):
 
 def test_worker_alert_exporter_errors_are_contained(tmp_path):
     q = queue.Queue()
-    alert_path = tmp_path / "alerts.jsonl"
+    tmp_path / "alerts.jsonl"
+
     class RaisingAlertExporter:
-        def write_alert(self, alert): raise OSError("disk full")
-        def flush(self): pass
-        def close(self): pass
+        def write_alert(self, alert):
+            raise OSError("disk full")
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
     worker = PipelineWorker(
         q,
         StateStore(),

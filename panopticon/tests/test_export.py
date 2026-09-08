@@ -5,7 +5,6 @@ import json
 
 from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether
-from scapy.packet import Raw
 from scapy.utils import rdpcap
 
 from panopticon.core.event import AlertEvent, PacketEvent
@@ -14,8 +13,7 @@ from panopticon.export.csv_writer import CSV_FIELDNAMES, CsvExportWriter
 from panopticon.export.pcap_writer import PcapExportWriter
 
 
-def ev(timestamp, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
-       sport=1000, dport=80, size=100):
+def ev(timestamp, src="10.0.0.1", dst="8.8.8.8", proto="tcp", sport=1000, dport=80, size=100):
     return PacketEvent(timestamp, src, dst, proto, sport, dport, size, "http")
 
 

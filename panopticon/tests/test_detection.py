@@ -1,7 +1,5 @@
 """DetectorEngine manager tests (dedup, store wiring, housekeeping)."""
 
-import pytest
-
 from panopticon.core.event import AlertEvent
 from panopticon.core.store import ALERTS_MAXLEN, StateStore
 from panopticon.detection.base import BaseDetector, DetectorEngine
@@ -26,8 +24,9 @@ class FixedDetector(BaseDetector):
 
 
 def alert(t, src="10.0.0.1"):
-    return AlertEvent(time=t, severity="warn", kind="fixed",
-                      summary="synthetic", src=src, dst="8.8.8.8")
+    return AlertEvent(
+        time=t, severity="warn", kind="fixed", summary="synthetic", src=src, dst="8.8.8.8"
+    )
 
 
 def test_engine_runs_all_detectors():
@@ -46,9 +45,16 @@ def test_engine_registers_detectors():
 
 def test_engine_returns_all_alerts_per_event():
     a = FixedDetector(alert(0.0))
-    b = FixedDetector(AlertEvent(time=0.0, severity="critical", kind="other",
-                                 summary="synthetic", src="10.0.0.1",
-                                 dst="8.8.8.8"))
+    b = FixedDetector(
+        AlertEvent(
+            time=0.0,
+            severity="critical",
+            kind="other",
+            summary="synthetic",
+            src="10.0.0.1",
+            dst="8.8.8.8",
+        )
+    )
     engine = DetectorEngine(StateStore(), detectors=[a, b])
     alerts = engine.process_event(object(), 1.0)
     assert len(alerts) == 2

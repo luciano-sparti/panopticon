@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from .core.event import PacketEvent
 from .core.store import StateStore
@@ -42,7 +42,7 @@ class PipelineWorker(threading.Thread):
         packet_queue: queue.Queue,
         store: StateStore,
         exporters: Iterable = (),
-        detector: Optional[DetectorEngine] = None,
+        detector: DetectorEngine | None = None,
         poll_interval: float = POLL_INTERVAL,
         alert_exporter=None,
     ) -> None:
@@ -53,9 +53,12 @@ class PipelineWorker(threading.Thread):
         self._detector = detector if detector is not None else DetectorEngine(store)
         self._poll_interval = poll_interval
         self._alert_exporter = alert_exporter
-        self._stop = threading.Event()
+        # NB: deliberately named _stop_event, NOT _stop: Thread reserves a
+        # private _stop() method used by join(); shadowing it makes join()
+        # raise "'Event' object is not callable" on a finished thread.
+        self._stop_event = threading.Event()
         self._error_count = 0
-        self._last_error: Optional[str] = None
+        self._last_error: str | None = None
         self._error_lock = threading.Lock()
 
     @property
@@ -65,7 +68,7 @@ class PipelineWorker(threading.Thread):
             return self._error_count
 
     @property
-    def last_error(self) -> Optional[str]:
+    def last_error(self) -> str | None:
         """Human-readable description of the most recent processing error."""
         with self._error_lock:
             return self._last_error
@@ -81,7 +84,7 @@ class PipelineWorker(threading.Thread):
 
     def stop(self) -> None:
         """Ask the worker to exit after the next queue poll."""
-        self._stop.set()
+        self._stop_event.set()
 
     def drain(self) -> int:
         """Process everything left in the queue (called at shutdown).
@@ -108,7 +111,7 @@ class PipelineWorker(threading.Thread):
         if self._alert_exporter is not None:
             self._alert_exporter.flush()
 
-    def prune(self, now: Optional[float] = None) -> int:
+    def prune(self, now: float | None = None) -> int:
         """Run detector housekeeping (expiry / dedup-map cleanup)."""
         return self._detector.prune(now)
 
@@ -117,7 +120,7 @@ class PipelineWorker(threading.Thread):
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 raw, event = self._queue.get(timeout=self._poll_interval)
             except queue.Empty:

@@ -19,20 +19,19 @@ from .tables import (
 )
 
 __all__ = [
-    "Dashboard",
-    "KeyboardWatcher",
     "PINNED_TAG",
     "SEVERITY_BADGES",
+    "Dashboard",
+    "KeyboardWatcher",
     "UIControls",
     "build_dashboard",
     "build_layout",
     "legend_text",
     "render_alerts",
-    "render_help",
     "render_header",
+    "render_help",
     "render_host_inspector",
     "render_stream_table",
     "render_telemetry",
     "render_top_talkers",
 ]
-

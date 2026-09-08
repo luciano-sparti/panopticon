@@ -7,7 +7,6 @@ raise, and never block on ``input()``.
 
 import io
 import os
-import signal as sig
 import threading
 import time
 
@@ -35,8 +34,9 @@ from panopticon.ui.keys import PINNED_TAG
 from panopticon.ui.tables import SEVERITY_STYLES, _fmt_bytes, rank_talkers
 
 
-def ev(ts, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
-       sport=1000, dport=80, size=100, service="http"):
+def ev(
+    ts, src="10.0.0.1", dst="8.8.8.8", proto="tcp", sport=1000, dport=80, size=100, service="http"
+):
     return PacketEvent(ts, src, dst, proto, sport, dport, size, service)
 
 
@@ -44,10 +44,10 @@ def populated_store():
     store = StateStore()
     for i in range(5):
         store.update(ev(float(i), src=f"10.0.0.{i + 1}", size=100 + i * 10))
-    store.add_alert(AlertEvent(1.0, "warn", "syn_scan",
-                               "SYN scan detected", "10.0.0.1", "8.8.8.8"))
-    store.add_alert(AlertEvent(2.0, "critical", "plaintext",
-                               "Credential leak", "10.0.0.2", "8.8.8.8"))
+    store.add_alert(AlertEvent(1.0, "warn", "syn_scan", "SYN scan detected", "10.0.0.1", "8.8.8.8"))
+    store.add_alert(
+        AlertEvent(2.0, "critical", "plaintext", "Credential leak", "10.0.0.2", "8.8.8.8")
+    )
     return store
 
 
@@ -121,12 +121,10 @@ def test_alert_severity_colour_mapping():
     assert SEVERITY_STYLES["critical"] == "red"
     assert SEVERITY_STYLES["warn"] == "yellow"
     assert SEVERITY_STYLES["info"] == "cyan"
-    table = render_alerts([AlertEvent(0.0, "critical", "syn_scan",
-                                      "scan", "s", "d")])
+    table = render_alerts([AlertEvent(0.0, "critical", "syn_scan", "scan", "s", "d")])
     cell = table.columns[1]._cells[0]
     assert "crit" in cell.plain
     assert cell.style == "red"
-
 
 
 # ----------------------------------------------------------------------
@@ -147,8 +145,7 @@ class _FakeStdin:
 def test_keyboard_q_sets_stop_event():
     read_fd, write_fd = os.pipe()
     stop = threading.Event()
-    watcher = KeyboardWatcher(stop, stdin=_FakeStdin(read_fd),
-                              poll_interval=0.01).start()
+    watcher = KeyboardWatcher(stop, stdin=_FakeStdin(read_fd), poll_interval=0.01).start()
     try:
         os.write(write_fd, b"junk q junk")
         assert stop.wait(timeout=2.0), "q never set the stop event"
@@ -161,8 +158,7 @@ def test_keyboard_q_sets_stop_event():
 def test_keyboard_ignores_other_keys():
     read_fd, write_fd = os.pipe()
     stop = threading.Event()
-    watcher = KeyboardWatcher(stop, stdin=_FakeStdin(read_fd),
-                              poll_interval=0.01).start()
+    watcher = KeyboardWatcher(stop, stdin=_FakeStdin(read_fd), poll_interval=0.01).start()
     try:
         os.write(write_fd, b"abc xyz")
         assert not stop.wait(timeout=0.3)
@@ -186,8 +182,7 @@ def test_keyboard_degrades_without_readable_stdin():
 def test_keyboard_stop_before_q_is_clean():
     read_fd, write_fd = os.pipe()
     stop = threading.Event()
-    watcher = KeyboardWatcher(stop, stdin=_FakeStdin(read_fd),
-                              poll_interval=0.01).start()
+    watcher = KeyboardWatcher(stop, stdin=_FakeStdin(read_fd), poll_interval=0.01).start()
     watcher.stop()  # must not raise even with a live fd
     os.close(read_fd)
     os.close(write_fd)
@@ -408,8 +403,7 @@ def test_k_is_noop_without_enable_kill():
 def test_k_without_known_flow_shows_status():
     store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
     store.update(ev(0.0, src="10.0.0.2", dst="10.0.0.5"), now=0.0)
-    controls = UIControls(store, enable_kill=True,
-                          kill_resolver=lambda ip, port: [1])
+    controls = UIControls(store, enable_kill=True, kill_resolver=lambda ip, port: [1])
     controls.feed(b"\x1b[B")
     controls.feed(b"k")
     assert controls.prompt is None
@@ -418,15 +412,15 @@ def test_k_without_known_flow_shows_status():
 
 def test_k_confirms_and_signals_selected_flow(monkeypatch):
     store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
-    store.update(ev(0.0, src="10.0.0.1", dst="10.0.0.5",
-                    sport=40000, dport=8080, size=100), now=0.0)
-    store.update(ev(1.0, src="10.0.0.5", dst="10.0.0.1",
-                    sport=8080, dport=40000, size=200), now=1.0)
+    store.update(
+        ev(0.0, src="10.0.0.1", dst="10.0.0.5", sport=40000, dport=8080, size=100), now=0.0
+    )
+    store.update(
+        ev(1.0, src="10.0.0.5", dst="10.0.0.1", sport=8080, dport=40000, size=200), now=1.0
+    )
     sent = []
-    monkeypatch.setattr("panopticon.ui.keys.os.kill",
-                        lambda pid, _sig: sent.append(pid))
-    controls = UIControls(store, enable_kill=True,
-                          kill_resolver=lambda ip, port: [123, 456])
+    monkeypatch.setattr("panopticon.ui.keys.os.kill", lambda pid, _sig: sent.append(pid))
+    controls = UIControls(store, enable_kill=True, kill_resolver=lambda ip, port: [123, 456])
     controls.feed(b"\x1b[B")
     controls.feed(b"k")
     assert controls.prompt["kind"] == "confirm"
@@ -439,15 +433,15 @@ def test_k_confirms_and_signals_selected_flow(monkeypatch):
 
 def test_k_confirm_n_aborts(monkeypatch):
     store = StateStore(self_ips={"10.0.0.1"}, self_host="host")
-    store.update(ev(0.0, src="10.0.0.1", dst="10.0.0.5",
-                    sport=40000, dport=8080, size=100), now=0.0)
-    store.update(ev(1.0, src="10.0.0.5", dst="10.0.0.1",
-                    sport=8080, dport=40000, size=200), now=1.0)
+    store.update(
+        ev(0.0, src="10.0.0.1", dst="10.0.0.5", sport=40000, dport=8080, size=100), now=0.0
+    )
+    store.update(
+        ev(1.0, src="10.0.0.5", dst="10.0.0.1", sport=8080, dport=40000, size=200), now=1.0
+    )
     sent = []
-    monkeypatch.setattr("panopticon.ui.keys.os.kill",
-                        lambda pid, _sig: sent.append(pid))
-    controls = UIControls(store, enable_kill=True,
-                          kill_resolver=lambda ip, port: [123])
+    monkeypatch.setattr("panopticon.ui.keys.os.kill", lambda pid, _sig: sent.append(pid))
+    controls = UIControls(store, enable_kill=True, kill_resolver=lambda ip, port: [123])
     controls.feed(b"\x1b[B")
     controls.feed(b"k")
     controls.feed(b"n")
@@ -564,14 +558,18 @@ def test_inspector_shows_ports_protocols_first_seen():
     from panopticon.core.event import PacketEvent
 
     store = StateStore()
-    for i, (src, dst, dport, proto) in enumerate([
-        ("10.9.9.9", "8.8.8.8", 443, "tcp"),
-        ("10.9.9.9", "8.8.4.4", 53, "udp"),
-        ("8.8.8.8", "10.9.9.9", 50000, "tcp"),
-    ]):
-        store.update(PacketEvent(float(i), src, dst, proto, 40000 + i,
-                                 dport if dst != "10.9.9.9" else 12345,
-                                 100, ""))
+    for i, (src, dst, dport, proto) in enumerate(
+        [
+            ("10.9.9.9", "8.8.8.8", 443, "tcp"),
+            ("10.9.9.9", "8.8.4.4", 53, "udp"),
+            ("8.8.8.8", "10.9.9.9", 50000, "tcp"),
+        ]
+    ):
+        store.update(
+            PacketEvent(
+                float(i), src, dst, proto, 40000 + i, dport if dst != "10.9.9.9" else 12345, 100, ""
+            )
+        )
     controls = UIControls(store)
     controls.inspecting_ip = "10.9.9.9"
     layout = build_layout(store, controls=controls)
@@ -786,7 +784,6 @@ def test_host_inspector_toggle_and_render():
     assert controls.inspecting_ip is None
 
 
-
 def test_stream_table_with_direction_indicators():
     events = [
         ev(1.0, src="192.168.1.10", dst="8.8.8.8"),
@@ -809,4 +806,3 @@ def test_multi_state_talker_pinned_and_selected():
     table = render_top_talkers(store.snapshot_talkers(), selected="10.0.0.1")
     text = render_text(table)
     assert "▸ ● 10.0.0.1" in text
-

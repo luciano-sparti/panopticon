@@ -216,8 +216,7 @@ def test_sniffer_running_mirrors_underlying_state():
         # Wait until the underlying AsyncSniffer has either started
         # capturing or failed (e.g. no root privileges).
         assert wait_until(
-            lambda: sniffer._sniffer.running
-            or sniffer._sniffer.exception is not None
+            lambda: sniffer._sniffer.running or sniffer._sniffer.exception is not None
         )
         # The liveness probe must reflect the underlying sniffer, not the
         # short-lived wrapper thread.

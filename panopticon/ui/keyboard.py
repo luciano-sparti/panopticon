@@ -13,23 +13,24 @@ crash or spin because of the watcher.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
 import sys
 import threading
-from typing import Callable, Optional
+from typing import Callable
 
 try:
     import msvcrt  # Windows only
 except ImportError:  # pragma: no cover - POSIX
-    msvcrt = None
+    msvcrt = None  # type: ignore[assignment]
 
 try:
     import termios
     import tty
 except ImportError:  # pragma: no cover - Windows
-    termios = None
-    tty = None
+    termios = None  # type: ignore[assignment]
+    tty = None  # type: ignore[assignment]
 
 # POSIX quit key, as raw bytes read off the fd.
 POSIX_QUIT_KEYS = (b"q",)
@@ -53,7 +54,7 @@ class KeyboardWatcher:
         stop_event: threading.Event,
         stdin=None,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
-        on_key: Optional[Callable[[bytes], None]] = None,
+        on_key: Callable[[bytes], None] | None = None,
     ) -> None:
         self._stop = stop_event
         self._stdin = stdin if stdin is not None else sys.stdin
@@ -68,7 +69,7 @@ class KeyboardWatcher:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def start(self) -> "KeyboardWatcher":
+    def start(self) -> KeyboardWatcher:
         """Spawn the background watcher thread."""
         if self._thread is not None and self._thread.is_alive():
             return self
@@ -81,7 +82,7 @@ class KeyboardWatcher:
         self._thread.start()
         return self
 
-    def stop(self, timeout: float = 1.0) -> "KeyboardWatcher":
+    def stop(self, timeout: float = 1.0) -> KeyboardWatcher:
         """Stop the watcher thread and restore the terminal if it was cbreak."""
         self._exit.set()
         if self._thread is not None:
@@ -126,15 +127,18 @@ class KeyboardWatcher:
         self._run_posix()
 
     def _run_posix(self) -> None:
+        fd = self._fd
+        if fd is None:
+            return
         while not self._exit.is_set() and not self._stop.is_set():
             try:
-                ready, _, _ = select.select([self._fd], [], [], self._poll)
+                ready, _, _ = select.select([fd], [], [], self._poll)
             except (OSError, ValueError):
                 return
             if not ready:
                 continue
             try:
-                data = os.read(self._fd, 4096)
+                data = os.read(fd, 4096)
             except (OSError, ValueError):
                 return
             if not data:  # EOF
@@ -146,15 +150,18 @@ class KeyboardWatcher:
 
     def _drain(self) -> None:
         """Consume any remaining queued keys so a late ``q`` is not missed."""
+        fd = self._fd
+        if fd is None:
+            return
         while True:
             try:
-                ready, _, _ = select.select([self._fd], [], [], 0)
+                ready, _, _ = select.select([fd], [], [], 0)
             except (OSError, ValueError):
                 return
             if not ready:
                 return
             try:
-                chunk = os.read(self._fd, 4096)
+                chunk = os.read(fd, 4096)
             except (OSError, ValueError):
                 return
             if not chunk:
@@ -166,8 +173,8 @@ class KeyboardWatcher:
     def _run_windows(self) -> None:
         while not self._exit.is_set() and not self._stop.is_set():
             try:
-                if msvcrt.kbhit():
-                    ch = msvcrt.getwch()
+                if msvcrt.kbhit():  # type: ignore[attr-defined]
+                    ch = msvcrt.getwch()  # type: ignore[attr-defined]
                     self._notify(ch.encode("utf-8", errors="replace"))
                     if ch in WINDOWS_QUIT_KEYS:
                         self._stop.set()
@@ -183,18 +190,14 @@ class KeyboardWatcher:
         """Forward raw key bytes to the registered handler, if any."""
         if self._on_key is None:
             return
-        try:
+        with contextlib.suppress(Exception):  # a handler bug must not kill the watcher
             self._on_key(data)
-        except Exception:  # noqa: BLE001 - a handler bug must not kill the watcher
-            pass
 
     def _contains_quit(self, data: bytes) -> bool:
         return any(key in data for key in POSIX_QUIT_KEYS)
 
     def _restore_terminal(self) -> None:
         if self._termios_restore is not None and termios is not None and self._fd is not None:
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 termios.tcsetattr(self._fd, termios.TCSADRAIN, self._termios_restore)
-            except (OSError, ValueError):
-                pass
             self._termios_restore = None

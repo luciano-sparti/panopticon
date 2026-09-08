@@ -11,8 +11,6 @@ in the pipeline thread.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from scapy.config import conf
 from scapy.layers.inet import IP
 from scapy.layers.inet6 import IPv6
@@ -42,7 +40,7 @@ class PcapExportWriter(BaseExporter):
         path: str,
         flush_every: int = DEFAULT_FLUSH_EVERY,
         flush_bytes: int = DEFAULT_FLUSH_BYTES,
-        linktype: Optional[int] = None,
+        linktype: int | None = None,
     ) -> None:
         self._path = path
         self._flush_every = flush_every
@@ -86,14 +84,14 @@ class PcapExportWriter(BaseExporter):
             self._writer.write_header(None)
 
     @staticmethod
-    def _infer_linktype(raw: bytes) -> Optional[int]:
+    def _infer_linktype(raw: bytes) -> int | None:
         """Guess a DLT value from the first frame, or ``None`` if unknown."""
         if len(raw) >= 14:
             try:
                 eth = Ether(raw)
                 if eth.type in _ETHER_TYPES:
                     return conf.l2types.layer2num[Ether]
-            except Exception:  # noqa: BLE001 - malformed frame
+            except Exception:  # noqa: BLE001, S110 - malformed frame
                 pass
         if raw:
             nibble = raw[0] >> 4

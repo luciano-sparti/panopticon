@@ -10,8 +10,7 @@ from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
 
 
-def ev(ts, src="10.0.0.1", dst="8.8.8.8", proto="tcp",
-       sport=1000, dport=80, size=100):
+def ev(ts, src="10.0.0.1", dst="8.8.8.8", proto="tcp", sport=1000, dport=80, size=100):
     return PacketEvent(ts, src, dst, proto, sport, dport, size, "http")
 
 
@@ -85,10 +84,12 @@ fe800000000000000000000000000001 03 40 20 80       wlan0
 
 
 def test_resolve_owned_ips_falls_back_when_proc_missing(monkeypatch):
-    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("No /proc")))
+    def _no_proc(*args, **kwargs):
+        raise OSError("No /proc")
+
+    monkeypatch.setattr("builtins.open", _no_proc)
     monkeypatch.setattr("panopticon.core.identity._fallback_ips", lambda: {"192.168.1.50"})
     ips = identity.resolve_owned_ips()
     assert "127.0.0.1" in ips
     assert "::1" in ips
     assert "192.168.1.50" in ips
-

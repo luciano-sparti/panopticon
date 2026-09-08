@@ -9,8 +9,6 @@ exceptions (including ``KeyboardInterrupt`` / ``SystemExit``) propagate.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.inet6 import IPv6
 from scapy.packet import Packet
@@ -110,7 +108,6 @@ def parse(pkt: Packet) -> PacketEvent:
         service=service,
         flags=flags,
     )
-
 
 
 def _fallback_packet() -> PacketEvent:

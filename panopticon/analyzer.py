@@ -26,7 +26,6 @@ import signal
 import sys
 import threading
 import time
-from typing import List, Optional
 
 from panopticon import __version__
 from panopticon.capture import Sniffer, auto_detect_interface, preflight
@@ -138,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _load_tags(store: StateStore, path: str) -> None:
     """Load ``{ip: [tags]}`` JSON into the store (best-effort)."""
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, ValueError):
         return
@@ -159,7 +158,7 @@ def _save_tags(store: StateStore, path: str) -> None:
         print(f"panopticon: could not save tags file {path}: {exc}", file=sys.stderr)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     interface = args.interface or auto_detect_interface()

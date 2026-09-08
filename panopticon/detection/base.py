@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, Hashable, List, Optional
+from collections.abc import Hashable
 
 from ..core.event import AlertEvent, PacketEvent
 from ..core.store import StateStore
@@ -35,15 +35,15 @@ class BaseDetector(ABC):
       expected to track its own per-flow cooldown (see HighPortDetector).
     """
 
-    engine_cooldown: Optional[float] = None
+    engine_cooldown: float | None = None
 
     @abstractmethod
     def process_event(
         self,
         event: PacketEvent,
         now: float,
-        raw: Optional[bytes] = None,
-    ) -> Optional[AlertEvent]:
+        raw: bytes | None = None,
+    ) -> AlertEvent | None:
         """Inspect one event; return an alert or ``None``."""
 
     def prune(self, now: float) -> int:
@@ -61,29 +61,29 @@ class DetectorEngine:
     def __init__(
         self,
         store: StateStore,
-        detectors: Optional[List[BaseDetector]] = None,
+        detectors: list[BaseDetector] | None = None,
         cooldown: float = ALERT_COOLDOWN,
     ) -> None:
         self._store = store
         self._cooldown = cooldown
-        self._detectors: List[BaseDetector] = list(detectors or [])
+        self._detectors: list[BaseDetector] = list(detectors or [])
         # Dedup key -> last accepted alert timestamp.
-        self._last_alert: Dict[Hashable, float] = {}
+        self._last_alert: dict[Hashable, float] = {}
 
     def register(self, detector: BaseDetector) -> None:
         """Add a detector to run on every event."""
         self._detectors.append(detector)
 
-    def detectors(self) -> List[BaseDetector]:
+    def detectors(self) -> list[BaseDetector]:
         """Snapshot of the registered detectors."""
         return list(self._detectors)
 
     def process_event(
         self,
         event: PacketEvent,
-        now: Optional[float] = None,
-        raw: Optional[bytes] = None,
-    ) -> List[AlertEvent]:
+        now: float | None = None,
+        raw: bytes | None = None,
+    ) -> list[AlertEvent]:
         """Run every detector on one event; return all accepted alerts.
 
         Every accepted alert is pushed to the store. Uses ``event.timestamp``
@@ -91,7 +91,7 @@ class DetectorEngine:
         synthetic timestamps.
         """
         ts = event.timestamp if now is None else now
-        accepted: List[AlertEvent] = []
+        accepted: list[AlertEvent] = []
         for detector in self._detectors:
             alert = detector.process_event(event, ts, raw)
             if alert is None:
@@ -103,7 +103,7 @@ class DetectorEngine:
             accepted.append(alert)
         return accepted
 
-    def prune(self, now: Optional[float] = None) -> int:
+    def prune(self, now: float | None = None) -> int:
         """Run housekeeping on every detector and the engine dedup map.
 
         Returns the total number of entries removed.
@@ -112,8 +112,7 @@ class DetectorEngine:
         total = 0
         for detector in self._detectors:
             total += detector.prune(ts)
-        stale = [key for key, last in self._last_alert.items()
-                 if ts - last > self._cooldown]
+        stale = [key for key, last in self._last_alert.items() if ts - last > self._cooldown]
         for key in stale:
             del self._last_alert[key]
         return total + len(stale)
@@ -124,11 +123,7 @@ class DetectorEngine:
 
     def _allow(self, alert: AlertEvent, detector: BaseDetector, ts: float) -> bool:
         """Apply cooldown dedup for a detector, keyed by ``(kind, src)``."""
-        cooldown = (
-            self._cooldown
-            if detector.engine_cooldown is None
-            else detector.engine_cooldown
-        )
+        cooldown = self._cooldown if detector.engine_cooldown is None else detector.engine_cooldown
         if cooldown <= 0:
             return True
         key: Hashable = (alert.kind, alert.src)

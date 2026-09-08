@@ -11,7 +11,7 @@ immune to the inode-column layout changing between kernel versions.
 from __future__ import annotations
 
 import os
-from typing import Iterable, List, Optional, Set
+from collections.abc import Iterable
 
 # Header token of every /proc/net/{tcp,udp,tcp6,udp6} table.
 _HEADER = "sl"
@@ -22,15 +22,15 @@ _SOCKET_SUFFIX = "]"
 
 def _read_text(path: str) -> str:
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return fh.read()
     except OSError:
         return ""
 
 
-def _all_socket_inodes(proc_root: str) -> Set[str]:
+def _all_socket_inodes(proc_root: str) -> set[str]:
     """Every socket inode currently referenced by some process's fd table."""
-    inodes: Set[str] = set()
+    inodes: set[str] = set()
     try:
         entries = os.listdir(proc_root)
     except OSError:
@@ -49,16 +49,16 @@ def _all_socket_inodes(proc_root: str) -> Set[str]:
             except OSError:
                 continue
             if target.startswith(_SOCKET_PREFIX) and target.endswith(_SOCKET_SUFFIX):
-                inodes.add(target[len(_SOCKET_PREFIX):-len(_SOCKET_SUFFIX)])
+                inodes.add(target[len(_SOCKET_PREFIX) : -len(_SOCKET_SUFFIX)])
     return inodes
 
 
 def _inet_table_inodes(
     text: str,
     port: int,
-    candidates: Set[str],
-    remote_port: Optional[int] = None,
-) -> Set[str]:
+    candidates: set[str],
+    remote_port: int | None = None,
+) -> set[str]:
     """Candidate socket inodes bound to ``port`` in a ``/proc/net/*`` dump.
 
     Each data row's local end is ``<addr-hex>:<port-hex>``; the inode
@@ -67,14 +67,10 @@ def _inet_table_inodes(
     remote_port) take precedence over general listening port matches.
     """
     want_local = f":{port:04X}"
-    want_remote = (
-        f":{remote_port:04X}"
-        if remote_port is not None and remote_port > 0
-        else None
-    )
+    want_remote = f":{remote_port:04X}" if remote_port is not None and remote_port > 0 else None
 
-    flow_matched: Set[str] = set()
-    port_matched: Set[str] = set()
+    flow_matched: set[str] = set()
+    port_matched: set[str] = set()
 
     for line in text.splitlines():
         if not line.strip() or line.startswith(_HEADER):
@@ -92,12 +88,12 @@ def _inet_table_inodes(
     return flow_matched if flow_matched else port_matched
 
 
-def _pids_for_socket_inodes(proc_root: str, inodes: Iterable[str]) -> List[int]:
+def _pids_for_socket_inodes(proc_root: str, inodes: Iterable[str]) -> list[int]:
     """PIDs whose fd table references any of the given socket inodes."""
     if not inodes:
         return []
     wanted = {f"socket:[{inode}]" for inode in inodes}
-    pids: List[int] = []
+    pids: list[int] = []
     try:
         entries = os.listdir(proc_root)
     except OSError:
@@ -124,8 +120,8 @@ def _pids_for_socket_inodes(proc_root: str, inodes: Iterable[str]) -> List[int]:
 def local_pids_for_port(
     port: int,
     proc_root: str = "/proc",
-    remote_port: Optional[int] = None,
-) -> List[int]:
+    remote_port: int | None = None,
+) -> list[int]:
     """PIDs with a socket bound to the given local port (Linux ``/proc``).
 
     Optionally matches ``remote_port`` to prioritize established 4-tuple flows.
@@ -133,7 +129,7 @@ def local_pids_for_port(
     candidates = _all_socket_inodes(proc_root)
     if not candidates:
         return []
-    matched: Set[str] = set()
+    matched: set[str] = set()
     for table in ("tcp", "tcp6", "udp", "udp6"):
         matched |= _inet_table_inodes(
             _read_text(os.path.join(proc_root, "net", table)),
@@ -142,4 +138,3 @@ def local_pids_for_port(
             remote_port=remote_port,
         )
     return _pids_for_socket_inodes(proc_root, matched)
-

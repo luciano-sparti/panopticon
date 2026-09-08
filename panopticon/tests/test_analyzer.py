@@ -51,10 +51,12 @@ class FakeSniffer:
     def start(self):
         if self.sig_on_start:
             signal.raise_signal(signal.SIGINT)
-        self.packet_queue.put((
-            b"\x00" * 60,
-            PacketEvent(0.0, "10.0.0.1", "8.8.8.8", "tcp", 1000, 50000, 100, "ephemeral"),
-        ))
+        self.packet_queue.put(
+            (
+                b"\x00" * 60,
+                PacketEvent(0.0, "10.0.0.1", "8.8.8.8", "tcp", 1000, 50000, 100, "ephemeral"),
+            )
+        )
 
     def stop(self):
         pass
@@ -65,11 +67,16 @@ class FakeSniffer:
 
 def make_args(tmp_path, extra=()):
     return [
-        "-i", "eth0",
-        "--export-pcap", str(tmp_path / "s.pcap"),
-        "--export-csv", str(tmp_path / "s.csv"),
-        "--refresh", "0.01",
-    ] + list(extra)
+        "-i",
+        "eth0",
+        "--export-pcap",
+        str(tmp_path / "s.pcap"),
+        "--export-csv",
+        str(tmp_path / "s.csv"),
+        "--refresh",
+        "0.01",
+        *list(extra),
+    ]
 
 
 def patch_healthy(monkeypatch):
@@ -138,8 +145,7 @@ def test_new_flags_parse():
 
 def test_tags_file_roundtrip_load_and_save(tmp_path):
     path = tmp_path / "tags.json"
-    path.write_text('{"1.1.1.1": ["web", "web"], "2.2.2.2": ["x"]}',
-                    encoding="utf-8")
+    path.write_text('{"1.1.1.1": ["web", "web"], "2.2.2.2": ["x"]}', encoding="utf-8")
     store = StateStore()
     _load_tags(store, str(path))
     assert store.tags_for("1.1.1.1") == {"web"}
@@ -170,7 +176,7 @@ def test_main_writes_tags_file_on_exit(monkeypatch, tmp_path):
 def test_main_no_ui_headless_path(monkeypatch, tmp_path, capsys):
     patch_healthy(monkeypatch)
     assert main(make_args(tmp_path, ["--no-ui"])) == 0
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "capturing on eth0" in out
     assert "1 packets" in out
 
@@ -178,7 +184,7 @@ def test_main_no_ui_headless_path(monkeypatch, tmp_path, capsys):
 def test_main_default_alert_path_is_written(monkeypatch, tmp_path, capsys):
     patch_healthy(monkeypatch)
     assert main(make_args(tmp_path)) == 0
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "session.alerts.jsonl" in out
     alert_path = tmp_path / "session.alerts.jsonl"
     assert alert_path.exists()
@@ -192,7 +198,7 @@ def test_main_custom_alert_path(monkeypatch, tmp_path, capsys):
     patch_healthy(monkeypatch)
     alert_path = tmp_path / "custom.alerts.jsonl"
     assert main(make_args(tmp_path, ["--export-alerts", str(alert_path)])) == 0
-    out, err = capsys.readouterr()
+    out, _err = capsys.readouterr()
     assert "custom.alerts.jsonl" in out
     lines = alert_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1

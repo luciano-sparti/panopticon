@@ -9,7 +9,6 @@ safe to call from the UI refresh thread at any cadence.
 from __future__ import annotations
 
 import datetime
-from typing import Dict, List, Optional, Set
 
 from rich.table import Table
 from rich.text import Text
@@ -53,7 +52,8 @@ def _fmt_bytes(n: float) -> str:
 
 def _fmt_time(ts: float) -> str:
     """Format an epoch timestamp as HH:MM:SS.mmm."""
-    dt = datetime.datetime.fromtimestamp(ts)
+    # Deliberately renders the operator's local wall-clock time.
+    dt = datetime.datetime.fromtimestamp(ts)  # noqa: DTZ006
     return f"{dt.strftime('%H:%M:%S')}.{dt.microsecond // 1000:03d}"
 
 
@@ -72,9 +72,16 @@ def _bar(value: float, maximum: float, width: int = BAR_WIDTH) -> str:
     return bars.ljust(width)
 
 
+def _spark_char(value: float, maximum: float) -> str:
+    """Map one sparkline sample onto ``BAR_CHARS``; blank for empty/slack bins."""
+    if not (maximum and value):
+        return " "
+    return BAR_CHARS[min(len(BAR_CHARS) - 1, int(value / maximum * (len(BAR_CHARS) - 1)))]
+
+
 def render_stream_table(
-    events: List[PacketEvent],
-    self_ips: Optional[Set[str]] = None,
+    events: list[PacketEvent],
+    self_ips: set[str] | None = None,
 ) -> Table:
     """Render the rolling stream buffer (newest events first)."""
     table = Table(
@@ -92,11 +99,7 @@ def render_stream_table(
     table.add_column("Size", justify="right", no_wrap=True)
     table.add_column("Service", no_wrap=True)
     for event in reversed(events):
-        ports = (
-            f"{event.sport}→{event.dport}"
-            if event.sport or event.dport
-            else "—"
-        )
+        ports = f"{event.sport}→{event.dport}" if event.sport or event.dport else "—"
         row = [_fmt_time(event.timestamp)]
         if self_ips:
             if event.src in self_ips and event.dst in self_ips:
@@ -108,26 +111,29 @@ def render_stream_table(
             else:
                 direction = "·"
             row.append(direction)
-        row.extend([
-            event.src or "?",
-            event.dst or "?",
-            event.proto,
-            ports,
-            str(event.size),
-            event.service or "",
-        ])
+        row.extend(
+            [
+                event.src or "?",
+                event.dst or "?",
+                event.proto,
+                ports,
+                str(event.size),
+                event.service or "",
+            ]
+        )
         table.add_row(*row)
     return table
 
 
-def rank_talkers(talkers: Dict[str, Dict], metric: str = "bytes") -> List:
+def rank_talkers(talkers: dict[str, dict], metric: str = "bytes") -> list:
     """Order ``(ip, stats)`` pairs: pinned talkers first, then metric desc.
 
     Shared by the renderer and the selector/key handler so both operate on
     the exact same ordering.
     """
+
     def sort_key(item):
-        ip, stats = item
+        _ip, stats = item
         tags = stats.get("tags", ()) or ()
         pinned = 0 if "pinned" in tags else 1
         return (pinned, -stats.get(metric, 0))
@@ -136,12 +142,12 @@ def rank_talkers(talkers: Dict[str, Dict], metric: str = "bytes") -> List:
 
 
 def render_top_talkers(
-    talkers: Dict[str, Dict],
+    talkers: dict[str, dict],
     top_n: int = DEFAULT_TOP_TALKERS,
     metric: str = "bytes",
-    selected: Optional[str] = None,
-    rates: Optional[Dict[str, float]] = None,
-    bar_peak: Optional[float] = None,
+    selected: str | None = None,
+    rates: dict[str, float] | None = None,
+    bar_peak: float | None = None,
 ) -> Table:
     """Render the busiest hosts with ASCII block activity bars.
 
@@ -165,13 +171,15 @@ def render_top_talkers(
     table.add_column("Tags", no_wrap=True)
 
     ranked = rank_talkers(talkers, metric)[:top_n]
-    maximum = bar_peak if bar_peak is not None else max(
-        (stats.get(metric, 0) for _, stats in ranked), default=0
+    maximum = (
+        bar_peak
+        if bar_peak is not None
+        else max((stats.get(metric, 0) for _, stats in ranked), default=0)
     )
     pinned_lines = []
     for ip, stats in ranked:
         tags = stats.get("tags", ()) or ()
-        is_sel = (ip == selected)
+        is_sel = ip == selected
         is_pin = "pinned" in tags
         if is_sel and is_pin:
             host = Text(f"▸ ● {ip}", style="bold reverse yellow")
@@ -186,26 +194,32 @@ def render_top_talkers(
         table.add_row(
             host,
             f"{stats.get('pkts', 0):,}",
-            _fmt_bytes(stats.get('bytes', 0)),
+            _fmt_bytes(stats.get("bytes", 0)),
             f"{_fmt_bytes(rate)}/s" if rate >= 1 else "—",
             _bar(stats.get(metric, 0), maximum),
             ", ".join(tags) if tags else "",
         )
         if is_pin:
             pinned_lines.append(
-                f"{ip} — {stats.get('pkts', 0):,} pkts · "
-                f"{_fmt_bytes(stats.get('bytes', 0))}"
+                f"{ip} — {stats.get('pkts', 0):,} pkts · {_fmt_bytes(stats.get('bytes', 0))}"
             )
     if pinned_lines:
         table.caption = "\n".join(f"Pinned: {line}" for line in pinned_lines)
     if not ranked:
-        table.add_row(Text("listening… no traffic yet", style="dim"), "", "", "", " " * BAR_WIDTH, "")
+        table.add_row(
+            Text("listening… no traffic yet", style="dim"),
+            "",
+            "",
+            "",
+            " " * BAR_WIDTH,
+            "",
+        )
     return table
 
 
 def render_telemetry(
-    telemetry: Dict,
-    sparkline: Optional[List] = None,
+    telemetry: dict,
+    sparkline: list | None = None,
 ) -> Table:
     """Render the telemetry snapshot (velocity, protocol mix, counters).
 
@@ -221,31 +235,23 @@ def render_telemetry(
     table.add_column("Value", justify="right")
 
     mix = telemetry.get("protocol_mix", {}) or {}
-    mix_text = ", ".join(
-        f"{proto.upper()} {pct}%" for proto, pct in sorted(mix.items()) if pct
-    )
-    rows = [
+    mix_text = ", ".join(f"{proto.upper()} {pct}%" for proto, pct in sorted(mix.items()) if pct)
+    rows: list[tuple[str, str | Text]] = [
         ("Packets/sec", f"{telemetry.get('packets_per_sec', 0.0):,.1f}"),
         ("Bytes/sec", f"{_fmt_bytes(telemetry.get('bytes_per_sec', 0.0))}/s"),
-        ("Avg packet size", _fmt_bytes(telemetry.get('avg_packet_size', 0.0))),
+        ("Avg packet size", _fmt_bytes(telemetry.get("avg_packet_size", 0.0))),
         ("Protocol mix", mix_text or "—"),
         ("Unique hosts", f"{telemetry.get('unique_hosts', 0):,}"),
         ("Total packets", f"{telemetry.get('total_packets', 0):,}"),
-        ("Total bytes", _fmt_bytes(telemetry.get('total_bytes', 0))),
+        ("Total bytes", _fmt_bytes(telemetry.get("total_bytes", 0))),
         ("Dropped", f"{telemetry.get('dropped_packets', 0):,}"),
         ("Alerts", f"{telemetry.get('alerts_total', 0):,}"),
     ]
     if sparkline:
         pps_max = max((p for p, _ in sparkline), default=0.0)
         bps_max = max((b for _, b in sparkline), default=0.0)
-        pps_bar = "".join(
-            BAR_CHARS[min(len(BAR_CHARS) - 1, int(p / pps_max * (len(BAR_CHARS) - 1)))] if pps_max and p else " "
-            for p, _ in sparkline
-        )
-        bps_bar = "".join(
-            BAR_CHARS[min(len(BAR_CHARS) - 1, int(b / bps_max * (len(BAR_CHARS) - 1)))] if bps_max and b else " "
-            for _, b in sparkline
-        )
+        pps_bar = "".join(_spark_char(p, pps_max) for p, _ in sparkline)
+        bps_bar = "".join(_spark_char(b, bps_max) for _, b in sparkline)
         rows.append(("pp/s history", Text(pps_bar, style="cyan")))
         rows.append(("B/s history", Text(bps_bar, style="magenta")))
     for metric, value in rows:
@@ -254,8 +260,8 @@ def render_telemetry(
 
 
 def render_alerts(
-    alerts: List[AlertEvent],
-    min_severity: Optional[str] = None,
+    alerts: list[AlertEvent],
+    min_severity: str | None = None,
 ) -> Table:
     """Render the alert buffer, colour-mapped by severity with dual-coding.
 
@@ -288,23 +294,21 @@ def render_alerts(
         shown += 1
     if not shown:
         placeholder = (
-            "no critical alerts" if min_severity == "critical"
-            else "listening… no alerts yet"
+            "no critical alerts" if min_severity == "critical" else "listening… no alerts yet"
         )
-        table.add_row(Text("—", style="dim"), "", "",
-                      Text(placeholder, style="dim"))
+        table.add_row(Text("—", style="dim"), "", "", Text(placeholder, style="dim"))
     return table
 
 
 def render_host_inspector(
     ip: str,
-    talker_data: Optional[Dict],
-    flow_data: Optional[Dict],
-    tags: List[str],
-    alerts: List[AlertEvent],
-    ports_contacted: Optional[List[int]] = None,
-    proto_mix: Optional[Dict[str, int]] = None,
-    first_seen: Optional[float] = None,
+    talker_data: dict | None,
+    flow_data: dict | None,
+    tags: list[str],
+    alerts: list[AlertEvent],
+    ports_contacted: list[int] | None = None,
+    proto_mix: dict[str, int] | None = None,
+    first_seen: float | None = None,
 ) -> Table:
     """Render a deep-dive inspection table for a selected host.
 
@@ -335,7 +339,10 @@ def render_host_inspector(
     table.add_row("Last Active", last_str)
 
     if flow_data:
-        flow_str = f"local port {flow_data['local_port']} ↔ remote port {flow_data['remote_port']} ({flow_data['proto']})"
+        flow_str = (
+            f"local port {flow_data['local_port']} ↔ remote port "
+            f"{flow_data['remote_port']} ({flow_data['proto']})"
+        )
         table.add_row("Active Flow", flow_str)
     else:
         table.add_row("Active Flow", "no active flow recorded")
@@ -394,4 +401,3 @@ def render_help(enable_kill: bool = False) -> Table:
     for key, action in lines:
         table.add_row(key, action)
     return table
-

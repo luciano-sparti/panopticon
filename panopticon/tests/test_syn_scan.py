@@ -1,7 +1,5 @@
 """SYN-scan detector tests using synthetic events (no root / live capture)."""
 
-import pytest
-
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
 from panopticon.detection.base import DetectorEngine
@@ -10,8 +8,15 @@ from panopticon.detection.syn_scan import SynScanDetector
 
 def syn(t, i, src="10.0.0.1", flags="S", sport=40000, dst="8.8.8.8"):
     return PacketEvent(
-        timestamp=t, src=src, dst=dst, proto="tcp",
-        sport=sport, dport=10000 + i, size=60, service="", flags=flags,
+        timestamp=t,
+        src=src,
+        dst=dst,
+        proto="tcp",
+        sport=sport,
+        dport=10000 + i,
+        size=60,
+        service="",
+        flags=flags,
     )
 
 
