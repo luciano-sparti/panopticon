@@ -2,19 +2,23 @@
 
 import os
 import queue
+import threading
 import time
+from unittest.mock import patch
 
 import pytest
 from scapy.arch import get_if_list
 from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether
 from scapy.packet import Raw
+from scapy.sendrecv import AsyncSniffer
 
 from panopticon.capture import (
     Sniffer,
     auto_detect_interface,
     handle_packet,
     preflight,
+    validate_bpf_filter,
 )
 from panopticon.capture.sniffer import (
     _cap_net_raw_enabled,
@@ -46,6 +50,35 @@ def test_preflight_rejects_unknown_interface():
     assert preflight("definitely-not-an-iface-xyz")
 
 
+def test_validate_bpf_accepts_empty_and_none():
+    assert validate_bpf_filter("eth0", None) == ""
+    assert validate_bpf_filter("eth0", "") == ""
+
+
+def test_validate_bpf_reports_invalid_filter():
+    with patch(
+        "panopticon.capture.sniffer.conf.L2listen",
+        side_effect=RuntimeError("syntax error"),
+    ):
+        problem = validate_bpf_filter("eth0", "tcp and )")
+    assert "invalid BPF filter 'tcp and )'" in problem
+    assert "syntax error" in problem
+
+
+def test_validate_bpf_accepts_compilable_filter(monkeypatch):
+    class FakeSocket:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def close(self):
+            self.closed = True
+
+    fake = FakeSocket(iface="eth0", filter="tcp")
+    monkeypatch.setattr("panopticon.capture.sniffer.conf.L2listen", lambda **kw: fake)
+    assert validate_bpf_filter("eth0", "tcp") == ""
+    assert fake.closed
+
+
 def test_handle_packet_parses_and_enqueues():
     q = queue.Queue()
     store = StateStore()
@@ -73,14 +106,29 @@ def test_handle_packet_prefers_original_wire_bytes():
     assert event.src == "1.2.3.4"
 
 
-def test_handle_packet_counts_dropped_when_queue_full():
+def test_handle_packet_counts_queue_drops_when_queue_full():
     q = queue.Queue(maxsize=1)
     store = StateStore()
     q.put_nowait((b"stale", None))
     handle_packet(q, store, pkt())
-    assert store.snapshot_telemetry()["dropped_packets"] == 1
+    telemetry = store.snapshot_telemetry()
+    assert telemetry["queue_drops"] == 1
+    assert telemetry["parse_failures"] == 0
+    assert telemetry["dropped_packets"] == 1
     assert q.qsize() == 1
     assert q.queue[0][0] == b"stale"
+
+
+def test_handle_packet_counts_parse_failures():
+    q = queue.Queue()
+    store = StateStore()
+    with patch("panopticon.capture.sniffer.parse", side_effect=ValueError("boom")):
+        handle_packet(q, store, object())
+    telemetry = store.snapshot_telemetry()
+    assert telemetry["parse_failures"] == 1
+    assert telemetry["queue_drops"] == 0
+    assert telemetry["dropped_packets"] == 1
+    assert q.empty()
 
 
 def test_handle_packet_skips_none():
@@ -104,6 +152,34 @@ def test_sniffer_construction_is_lazy():
     assert sniffer.interface == "lo"
     assert not sniffer.running
     sniffer.stop()
+
+
+def test_sniffer_join_waits_for_real_capture_thread(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def fake_start(obj, *args, **kwargs):
+        thread = threading.Thread(
+            target=lambda: (started.set(), release.wait(5), time.sleep(0.3)),
+            daemon=True,
+        )
+        obj.thread = thread
+        thread.start()
+        return thread
+
+    monkeypatch.setattr(AsyncSniffer, "start", fake_start)
+    sniffer = Sniffer("lo", queue.Queue(), StateStore())
+    sniffer.start()
+    assert started.wait(1.0)
+
+    release.set()
+    begin = time.monotonic()
+    sniffer.join(timeout=5.0)
+    elapsed = time.monotonic() - begin
+    # Riding the wrapper thread only would return in ~0s; the fix must also
+    # wait for the AsyncSniffer capture loop (which sleeps 0.3s after release).
+    assert elapsed >= 0.25
+    assert not sniffer._sniffer.thread.is_alive()
 
 
 def wait_until(cond, timeout=5.0):

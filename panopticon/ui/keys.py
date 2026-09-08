@@ -379,11 +379,11 @@ class UIControls:
         with self._lock:
             if self.prompt is not None:
                 return self.prompt_text
-            if self.status and time.time() < self._status_expires:
+            if self.status and time.monotonic() < self._status_expires:
                 return self.status
             return legend_text(self.enable_kill)
 
     def _set_status(self, message: str, ttl: float = STATUS_TTL) -> None:
         with self._lock:
             self.status = message
-            self._status_expires = time.time() + ttl
+            self._status_expires = time.monotonic() + ttl

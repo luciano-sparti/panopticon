@@ -61,15 +61,15 @@ safety-net work lands before performance and feature work.
 
 ## Phase 9 — Robustness & features
 
-- [ ] **9.1** Split dropped-packet counters: parse failures vs queue-full
+- [x] **9.1** Split dropped-packet counters: parse failures vs queue-full
   backpressure (`capture/sniffer.py`).
-- [ ] **9.2** Validate BPF filter up front; fail fast instead of async poll.
-- [ ] **9.3** Join the real sniffer thread (`AsyncSniffer.thread`); wrapper
+- [x] **9.2** Validate BPF filter up front; fail fast instead of async poll.
+- [x] **9.3** Join the real sniffer thread (`AsyncSniffer.thread`); wrapper
   thread joins a dead thread today.
-- [ ] **9.4** Restore TTY state via `finally`/`atexit` in `KeyboardWatcher`.
-- [ ] **9.5** Inject a Clock abstraction (monotonic housekeeping vs packet
+- [x] **9.4** Restore TTY state via `finally`/`atexit` in `KeyboardWatcher`.
+- [x] **9.5** Inject a Clock abstraction (monotonic housekeeping vs packet
   time for detection windows) — NTP steps / pcap replays break TTLs today.
-- [ ] **9.6** Reverse DNS (cached, opt-in) + private/link-local/multicast
+- [x] **9.6** Reverse DNS (cached, opt-in) + private/link-local/multicast
   classification for inspector/talkers tables.
 - [ ] **9.7** TLS SNI / DHCP hostname extraction in parser → meaningful names.
 - [ ] **9.8** Flow/session tracking → FIN/NULL/Xmas scan detection.

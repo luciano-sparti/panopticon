@@ -8,10 +8,10 @@ the shared ``StateStore``.
 
 from __future__ import annotations
 
-import time
 from abc import ABC, abstractmethod
 from collections.abc import Hashable
 
+from ..core.clock import Clock
 from ..core.event import AlertEvent, PacketEvent
 from ..core.store import StateStore
 
@@ -64,9 +64,11 @@ class DetectorEngine:
         store: StateStore,
         detectors: list[BaseDetector] | None = None,
         cooldown: float = ALERT_COOLDOWN,
+        clock: Clock | None = None,
     ) -> None:
         self._store = store
         self._cooldown = cooldown
+        self._clock = clock if clock is not None else Clock()
         self._detectors: list[BaseDetector] = list(detectors or [])
         # Dedup key -> last accepted alert timestamp.
         self._last_alert: dict[Hashable, float] = {}
@@ -109,7 +111,7 @@ class DetectorEngine:
 
         Returns the total number of entries removed.
         """
-        ts = time.time() if now is None else now
+        ts = self._clock.now() if now is None else now
         total = 0
         for detector in self._detectors:
             total += detector.prune(ts)

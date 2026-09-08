@@ -1,5 +1,6 @@
 """DetectorEngine manager tests (dedup, store wiring, housekeeping)."""
 
+from panopticon.core.clock import Clock
 from panopticon.core.event import AlertEvent
 from panopticon.core.store import ALERTS_MAXLEN, StateStore
 from panopticon.detection.base import BaseDetector, DetectorEngine
@@ -118,6 +119,26 @@ def test_engine_prune_delegates_to_detectors():
     engine = DetectorEngine(StateStore(), detectors=[detector])
     assert engine.prune(now=100.0) == 2
     assert detector.pruned_at == [100.0]
+
+
+def test_engine_prune_defaults_to_injected_clock():
+    class _FakeMonotonic:
+        def __init__(self, value):
+            self.value = value
+
+        def __call__(self):
+            return self.value
+
+    detector = FixedDetector(alert(0.0))
+    engine = DetectorEngine(
+        StateStore(),
+        detectors=[detector],
+        clock=Clock(_FakeMonotonic(42.0)),
+    )
+    # No explicit "now": the engine must read its (monotonic) clock so a
+    # wall-clock step cannot wipe the dedup map.
+    assert engine.prune() == 2
+    assert detector.pruned_at == [42.0]
 
 
 def test_alert_buffer_is_bounded_and_counter_keeps_running():

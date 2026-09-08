@@ -164,18 +164,22 @@ def render_top_talkers(
         box=None,
     )
     table.add_column("Host", style="bold", no_wrap=True)
-    table.add_column("Packets", justify="right")
-    table.add_column("Bytes", justify="right")
-    table.add_column("Rate", justify="right", no_wrap=True)
-    table.add_column("Activity", justify="left")
-    table.add_column("Tags", no_wrap=True)
-
+    has_names = False
     ranked = rank_talkers(talkers, metric)[:top_n]
     maximum = (
         bar_peak
         if bar_peak is not None
         else max((stats.get(metric, 0) for _, stats in ranked), default=0)
     )
+    if any(stats.get("name") for _, stats in ranked):
+        has_names = True
+        table.add_column("Name", no_wrap=True)
+    table.add_column("Packets", justify="right")
+    table.add_column("Bytes", justify="right")
+    table.add_column("Rate", justify="right", no_wrap=True)
+    table.add_column("Activity", justify="left")
+    table.add_column("Tags", no_wrap=True)
+
     pinned_lines = []
     for ip, stats in ranked:
         tags = stats.get("tags", ()) or ()
@@ -191,14 +195,17 @@ def render_top_talkers(
             host = Text(ip)
 
         rate = (rates or {}).get(ip, 0.0)
-        table.add_row(
+        name = stats.get("name") or ""
+        row = [
             host,
+            name if has_names else None,
             f"{stats.get('pkts', 0):,}",
-            _fmt_bytes(stats.get("bytes", 0)),
+            f"{_fmt_bytes(stats.get('bytes', 0))}",
             f"{_fmt_bytes(rate)}/s" if rate >= 1 else "—",
             _bar(stats.get(metric, 0), maximum),
             ", ".join(tags) if tags else "",
-        )
+        ]
+        table.add_row(*[cell for cell in row if cell is not None])
         if is_pin:
             pinned_lines.append(
                 f"{ip} — {stats.get('pkts', 0):,} pkts · {_fmt_bytes(stats.get('bytes', 0))}"
@@ -236,6 +243,13 @@ def render_telemetry(
 
     mix = telemetry.get("protocol_mix", {}) or {}
     mix_text = ", ".join(f"{proto.upper()} {pct}%" for proto, pct in sorted(mix.items()) if pct)
+    dropped = telemetry.get("dropped_packets", 0)
+    dropped_detail = (
+        f"{dropped:,} (parse {telemetry.get('parse_failures', 0):,} / "
+        f"queue {telemetry.get('queue_drops', 0):,})"
+        if dropped
+        else f"{dropped:,}"
+    )
     rows: list[tuple[str, str | Text]] = [
         ("Packets/sec", f"{telemetry.get('packets_per_sec', 0.0):,.1f}"),
         ("Bytes/sec", f"{_fmt_bytes(telemetry.get('bytes_per_sec', 0.0))}/s"),
@@ -244,7 +258,7 @@ def render_telemetry(
         ("Unique hosts", f"{telemetry.get('unique_hosts', 0):,}"),
         ("Total packets", f"{telemetry.get('total_packets', 0):,}"),
         ("Total bytes", _fmt_bytes(telemetry.get("total_bytes", 0))),
-        ("Dropped", f"{telemetry.get('dropped_packets', 0):,}"),
+        ("Dropped", dropped_detail),
         ("Alerts", f"{telemetry.get('alerts_total', 0):,}"),
     ]
     if sparkline:
@@ -332,6 +346,13 @@ def render_host_inspector(
 
     table.add_row("Host IP", ip)
     table.add_row("Tags", tag_str)
+    if talker_data:
+        cls = talker_data.get("class")
+        if cls:
+            table.add_row("Classification", cls.replace("-", " ").title())
+        name = talker_data.get("name")
+        if name:
+            table.add_row("Hostname", name)
     if first_seen is not None:
         table.add_row("First Seen", _fmt_time(first_seen))
     table.add_row("Total Packets", f"{pkts:,}")

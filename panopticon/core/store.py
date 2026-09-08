@@ -1,7 +1,7 @@
 """Thread-safe central state store for Panopticon.
 
 All shared state (rolling stream buffer, top talkers, EWMA velocity
-metrics, protocol mix, dropped-packet counter) lives here behind a single
+metrics, protocol mix, per-cause drop counters) lives here behind a single
 ``threading.RLock``. Snapshot methods return short-lived copies:
 frozen-dataclass events (with immutable ``payload`` bytes) are handed out as
 list copies, mutable talker records are shallow-copied per row, so the UI
@@ -11,13 +11,14 @@ thread never mutates store-owned state and never pays for deep copies.
 from __future__ import annotations
 
 import threading
-import time
 from collections import deque
 from collections.abc import Iterable
 
 from . import identity
+from .clock import Clock
 from .event import AlertEvent, PacketEvent
 from .lru import evict_lru
+from .names import HostnameResolver, classify_ip
 
 # Rolling stream buffer length (kept on-screen / in UI).
 STREAM_MAXLEN = 500
@@ -47,7 +48,11 @@ class StateStore:
         self,
         self_ips: set[str] | None = None,
         self_host: str | None = None,
+        clock: Clock | None = None,
+        names: HostnameResolver | None = None,
     ) -> None:
+        self._clock = clock if clock is not None else Clock()
+        self._names = names
         self._lock = threading.RLock()
         self._stream: deque[PacketEvent] = deque(maxlen=STREAM_MAXLEN)
         self._alerts: deque[AlertEvent] = deque(maxlen=ALERTS_MAXLEN)
@@ -56,11 +61,17 @@ class StateStore:
         self._proto_counts: dict[str, int] = {p: 0 for p in PROTOCOLS}
         self._total_packets = 0
         self._total_bytes = 0
-        self._dropped = 0
+        # Per-cause drop accounting, split by sniffer.handle_packet: frames
+        # that failed parsing vs. frames rejected by a full capture queue.
+        self._parse_failures = 0
+        self._queue_drops = 0
 
         # IP -> tags. Kept separate from ``_top_talkers`` so tags survive
         # LRU eviction and TTL pruning of a talker's telemetry.
         self._tags: dict[str, set[str]] = {}
+        # IP -> classify_ip() result, memoized so twice-a-second snapshots of
+        # up to ``MAX_TALKERS`` entries never re-parse the same addresses.
+        self._class_cache: dict[str, str] = {}
         # Remote IP -> (local_port, remote_port, proto) of the last flow.
         # Used to resolve the local process for the scoped kill feature.
         self._flows: dict[str, tuple[int, int, str]] = {}
@@ -126,10 +137,15 @@ class StateStore:
             for event in events:
                 self.update(event, now)
 
-    def increment_dropped(self, count: int = 1) -> None:
-        """Atomically increment the dropped-packet counter."""
+    def increment_parse_failure(self, count: int = 1) -> None:
+        """Atomically count a frame that failed parsing."""
         with self._lock:
-            self._dropped += count
+            self._parse_failures += count
+
+    def increment_queue_drop(self, count: int = 1) -> None:
+        """Atomically count a frame dropped for a full capture queue."""
+        with self._lock:
+            self._queue_drops += count
 
     def flush_velocity(self, now: float | None = None) -> None:
         """Fold per-tick accumulated counters into the EWMA velocity state.
@@ -142,7 +158,7 @@ class StateStore:
         value seeded exactly: it measures sample means, so the EWMA warm-up
         must not halve its first sample.
         """
-        ts = time.time() if now is None else now
+        ts = self._clock.now() if now is None else now
         with self._lock:
             dt = max(ts - self._last_flush, MIN_DT_EPSILON)
             if self._acc_pkts:
@@ -193,7 +209,7 @@ class StateStore:
         Pinned talkers are never pruned so their mini-telemetry line stays
         visible. Returns the number of entries removed.
         """
-        ref = time.time() if now is None else now
+        ref = self._clock.now() if now is None else now
         with self._lock:
             stale = []
             for ip, talker in self._top_talkers.items():
@@ -203,8 +219,25 @@ class StateStore:
                     stale.append(ip)
             for ip in stale:
                 del self._top_talkers[ip]
+                self._class_cache.pop(ip, None)
                 self._flows.pop(ip, None)
             return len(stale)
+
+    def pump_hostnames(self, limit: int = 64) -> None:
+        """Kick background reverse-DNS lookups for the busiest talkers.
+
+        No-op when no resolver is attached. Cheap and non-blocking; the
+        resolver caches answers and dedupes in-flight lookups.
+        """
+        if self._names is None:
+            return
+        with self._lock:
+            ips = sorted(
+                self._top_talkers,
+                key=lambda ip: self._top_talkers[ip].get("bytes", 0),
+                reverse=True,
+            )[: max(limit, 1)]
+        self._names.kick(ips)
 
     # ------------------------------------------------------------------
     # Snapshot API (UI thread) - short-lived copies, never shared mutables
@@ -227,7 +260,8 @@ class StateStore:
     def snapshot_talkers(self) -> dict[str, dict]:
         """Copy of the top-talker map with tags merged in.
 
-        Each entry: ``{"pkts", "bytes", "last_seen", "tags": [...]}``.
+        Each entry: ``{"pkts", "bytes", "last_seen", "tags": [...],
+        "class": <category>, "name": <resolved hostname or "">}``.
 
         Inner talker records are small mutable dicts owned by the worker;
         each is shallow-copied here (scalar values only) so the UI gets its
@@ -238,6 +272,12 @@ class StateStore:
             for ip, talker in snap.items():
                 tags = self._tags.get(ip)
                 talker["tags"] = sorted(tags) if tags else []
+                cls = self._class_cache.get(ip)
+                if cls is None:
+                    cls = classify_ip(ip)
+                    self._class_cache[ip] = cls
+                talker["class"] = cls
+                talker["name"] = self._names.name_for(ip) if self._names is not None else ""
             return snap
 
     def snapshot_tags(self) -> dict[str, list[str]]:
@@ -287,7 +327,9 @@ class StateStore:
                 "unique_hosts": len(self._top_talkers),
                 "total_packets": self._total_packets,
                 "total_bytes": self._total_bytes,
-                "dropped_packets": self._dropped,
+                "dropped_packets": self._parse_failures + self._queue_drops,
+                "parse_failures": self._parse_failures,
+                "queue_drops": self._queue_drops,
                 "alerts_total": self._alerts_total,
             }
 
@@ -308,4 +350,5 @@ class StateStore:
             self._top_talkers,
             last_seen=lambda ip: self._top_talkers[ip]["last_seen"],
             cap=MAX_TALKERS,
+            on_evict=lambda ip: self._class_cache.pop(ip, None),
         )

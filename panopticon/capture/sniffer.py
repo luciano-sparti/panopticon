@@ -5,7 +5,7 @@ capture (root / CAP_NET_RAW on POSIX, Npcap on Windows), resolves the
 capture interface, and runs ``scapy.sendrecv.AsyncSniffer`` in a daemon
 thread with ``store=False``. Each frame is parsed into a ``PacketEvent``
 and pushed onto the shared queue as ``(raw_bytes, event)``; if the queue
-is full the frame is counted as dropped instead of blocking capture.
+is full the frame is counted as a queue-drop instead of blocking capture.
 """
 
 from __future__ import annotations
@@ -16,8 +16,10 @@ import queue
 import sys
 import threading
 from functools import partial
+from typing import Any
 
 from scapy.arch import get_if_list
+from scapy.config import conf
 from scapy.sendrecv import AsyncSniffer
 
 from ..core.parser import parse
@@ -110,6 +112,27 @@ def preflight(interface: str) -> str:
     return _privilege_problem()
 
 
+def validate_bpf_filter(interface: str, bpf_filter: str | None) -> str:
+    """Return "" when ``bpf_filter`` compiles cleanly for ``interface``.
+
+    Opens a throwaway libpcap listener socket so an invalid BPF expression is
+    rejected at startup (clear exit-code-2 error) instead of surfacing
+    asynchronously after capture starts. Caller must have passed
+    ``preflight`` (capture privileges). Never raises: any failure — including
+    the permission errors a de-privileged probe would produce — becomes a
+    descriptive error string.
+    """
+    if not bpf_filter:
+        return ""
+    try:
+        sock: Any = conf.L2listen(iface=interface, filter=bpf_filter)
+    except Exception as exc:  # noqa: BLE001 - surface any compile/open error
+        return f"invalid BPF filter {bpf_filter!r}: {exc}"
+    with contextlib.suppress(Exception):
+        sock.close()
+    return ""
+
+
 def _is_pseudo_interface(name: str) -> bool:
     if name in _LOOPBACK_NAMES:
         return True
@@ -185,9 +208,10 @@ def handle_packet(
 ) -> None:
     """Parse ``pkt`` and enqueue ``(raw_bytes, event)`` non-blocking.
 
-    On a full queue the frame is counted as dropped instead of stalling
+    On a full queue the frame is counted as a queue drop instead of stalling
     capture. Any parse/serialization failure is contained here so one bad
-    frame cannot kill the capture thread; the frame is counted as dropped.
+    frame cannot kill the capture thread; the frame is counted as a parse
+    failure. The two causes are tracked separately in the store.
     """
     if pkt is None:
         return
@@ -198,12 +222,12 @@ def handle_packet(
         # where ``pkt.original`` is empty.
         raw = pkt.original or bytes(pkt)
     except Exception:  # noqa: BLE001 - one bad frame must not stop capture
-        store.increment_dropped()
+        store.increment_parse_failure()
         return
     try:
         packet_queue.put_nowait((raw, event))
     except queue.Full:
-        store.increment_dropped()
+        store.increment_queue_drop()
 
 
 # ----------------------------------------------------------------------
@@ -215,7 +239,10 @@ class Sniffer:
     """Async capture feeding ``(raw_bytes, PacketEvent)`` onto a queue.
 
     The underlying ``AsyncSniffer`` runs inside its own daemon thread with
-    ``store=False`` so Scapy never accumulates a frame backlog.
+    ``store=False`` so Scapy never accumulates a frame backlog. The wrapper
+    thread only dispatches ``AsyncSniffer.start``; joining it fast-forwards
+    to the real capture loop, which is joined in ``join()`` so shutdown
+    actually waits for the capture socket to close.
     """
 
     def __init__(
@@ -278,4 +305,13 @@ class Sniffer:
             self._sniffer.stop()
 
     def join(self, timeout: float | None = None) -> None:
+        """Wait for the wrapper *and* the real capture loop to end.
+
+        The ``AsyncSniffer`` capture loop lives on its own thread (created
+        by ``AsyncSniffer.start``); joining only the wrapper thread would
+        return before the capture socket is actually closed.
+        """
         self._thread.join(timeout)
+        internal = self._sniffer.thread
+        if internal is not None and internal.is_alive():
+            internal.join(timeout)

@@ -25,10 +25,11 @@ import queue
 import signal
 import sys
 import threading
-import time
 
 from panopticon import __version__
-from panopticon.capture import Sniffer, auto_detect_interface, preflight
+from panopticon.capture import Sniffer, auto_detect_interface, preflight, validate_bpf_filter
+from panopticon.core.clock import Clock
+from panopticon.core.names import HostnameResolver
 from panopticon.core.store import StateStore
 from panopticon.detection import (
     DetectorEngine,
@@ -127,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="JSON {ip: [tags]} path loaded at start and saved on exit",
     )
     parser.add_argument(
+        "--resolve-hosts",
+        action="store_true",
+        help="Reverse-DNS resolve talker hostnames in the background (cached)",
+    )
+    parser.add_argument(
         "--export-alerts",
         default="",
         help="JSONL path for detector alerts (default: session.alerts.jsonl)",
@@ -174,7 +180,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"panopticon: {problem}", file=sys.stderr)
         return 2
 
-    store = StateStore()
+    bpf_problem = validate_bpf_filter(interface, args.filter or None)
+    if bpf_problem:
+        print(f"panopticon: {bpf_problem}", file=sys.stderr)
+        return 2
+
+    clock = Clock()
+    resolver = HostnameResolver(enabled=args.resolve_hosts)
+    store = StateStore(clock=clock, names=resolver)
     if args.tags_file:
         _load_tags(store, args.tags_file)
     packet_queue: queue.Queue = queue.Queue(maxsize=args.queue_size)
@@ -206,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             HighPortDetector(threshold_port=args.high_port),
         ],
         cooldown=args.alert_cooldown,
+        clock=clock,
     )
     worker = PipelineWorker(
         packet_queue,
@@ -234,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"panopticon: capturing on {interface}"
         + (f" with BPF filter {args.filter!r}" if args.filter else "")
+        + (" — resolving hostnames" if args.resolve_hosts else "")
         + " — Ctrl+C or q to stop"
     )
 
@@ -244,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         nonlocal reported_worker_errors
         while not shutdown.is_set() and not keyboard_stop.is_set():
             shutdown.wait(args.refresh)
-            now = time.time()
+            now = clock.now()
             if keyboard_stop.is_set():
                 break
             if sniffer.capture_failed:
@@ -263,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
             store.flush_velocity(now)
             store.prune(now)
             worker.prune(now)
+            store.pump_hostnames()
 
     try:
         if args.no_ui:
@@ -307,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.tags_file:
             _save_tags(store, args.tags_file)
 
-    store.flush_velocity(time.time())
+    store.flush_velocity(clock.now())
     telemetry = store.snapshot_telemetry()
     print(
         f"panopticon: stopped — {telemetry['total_packets']} packets, "

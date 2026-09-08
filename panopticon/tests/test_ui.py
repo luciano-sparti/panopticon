@@ -96,6 +96,26 @@ def test_top_talkers_empty_is_safe():
     assert isinstance(table, Table)
 
 
+def test_top_talkers_name_column_when_names_present():
+    talkers = {
+        "10.0.0.1": {"pkts": 1, "bytes": 100, "last_seen": 0.0, "tags": [], "name": "nas.lan"},
+        "8.8.8.8": {"pkts": 2, "bytes": 200, "last_seen": 0.0, "tags": [], "name": ""},
+    }
+    table = render_top_talkers(talkers)
+    text = render_text(table)
+    assert "Name" in text
+    assert "nas.lan" in text
+
+
+def test_top_talkers_no_name_column_without_names():
+    talkers = {
+        "10.0.0.1": {"pkts": 1, "bytes": 100, "last_seen": 0.0, "tags": []},
+        "8.8.8.8": {"pkts": 2, "bytes": 200, "last_seen": 0.0, "tags": []},
+    }
+    table = render_top_talkers(talkers)
+    assert "Name" not in render_text(table)
+
+
 def test_render_telemetry_from_snapshot():
     telemetry = populated_store().snapshot_telemetry()
     table = render_telemetry(telemetry)
@@ -230,6 +250,68 @@ def test_keyboard_handler_error_does_not_kill_watcher():
         watcher.stop()
         os.close(read_fd)
         os.close(write_fd)
+
+
+def test_keyboard_restores_terminal_after_early_loop_exit(monkeypatch):
+    """An early loop exit (stop pre-set before the loop runs) must undo cbreak."""
+    seen = {"setcbreak": [], "tcgetattr": [], "tcsetattr": []}
+
+    class _FakeTermios:
+        TCSANOW = 0
+        TCSADRAIN = 0
+
+        @staticmethod
+        def tcgetattr(fd):
+            seen["tcgetattr"].append(fd)
+            return ("saved",)
+
+        @staticmethod
+        def tcsetattr(fd, action, attrs):
+            seen["tcsetattr"].append((fd, action, attrs))
+
+    class _FakeTty:
+        @staticmethod
+        def setcbreak(fd, action):
+            seen["setcbreak"].append((fd, action))
+
+    monkeypatch.setattr("panopticon.ui.keyboard.termios", _FakeTermios)
+    monkeypatch.setattr("panopticon.ui.keyboard.tty", _FakeTty)
+
+    master, slave = os.openpty()
+    try:
+
+        class _TTYStdIn:
+            def fileno(self):
+                return slave
+
+        stop = threading.Event()
+        stop.set()  # the loop is skipped, simulating an early exit
+        watcher = KeyboardWatcher(stop, stdin=_TTYStdIn(), poll_interval=0.01)
+        watcher._run()  # synchronous: engages cbreak, returns early, must restore
+        assert seen["tcgetattr"], "cbreak was never engaged"
+        assert seen["setcbreak"], "cbreak was never engaged"
+        assert seen["tcsetattr"], "terminal was not restored on early exit"
+        assert seen["tcsetattr"][0][2] == ("saved",)
+        assert watcher._termios_restore is None
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+def test_keyboard_start_registers_atexit_restore(monkeypatch):
+    registered = []
+    monkeypatch.setattr("atexit.register", registered.append)
+    read_fd, write_fd = os.pipe()
+    stop = threading.Event()
+    try:
+        watcher = KeyboardWatcher(stop, stdin=_FakeStdin(read_fd), poll_interval=0.01).start()
+        assert watcher._termios_restore is None  # pipe: nothing to restore
+        assert watcher._atexit_registered
+    finally:
+        watcher.stop()
+        os.close(read_fd)
+        os.close(write_fd)
+    assert any(callable(f) and getattr(f, "__self__", None) is watcher for f in registered)
 
 
 # ----------------------------------------------------------------------
@@ -577,6 +659,8 @@ def test_inspector_shows_ports_protocols_first_seen():
     assert "First Seen" in text
     assert "Ports Contacted" in text
     assert "Protocol Mix" in text
+    assert "Classification" in text
+    assert "Private" in text  # 10.9.9.9 is RFC 1918
 
 
 def test_dashboard_derives_rates_sparkline_and_uptime():

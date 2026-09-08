@@ -13,6 +13,7 @@ crash or spin because of the watcher.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import os
 import select
@@ -64,6 +65,7 @@ class KeyboardWatcher:
         self._thread: threading.Thread | None = None
         self._termios_restore = None
         self._fd: int | None = None
+        self._atexit_registered = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -80,6 +82,12 @@ class KeyboardWatcher:
             daemon=True,
         )
         self._thread.start()
+        if not self._atexit_registered:
+            # Last line of defense: if the process exits without the watcher
+            # being stopped (crash, exception, SIGTERM), undo cbreak so the
+            # user's terminal is not left raw.
+            atexit.register(self._restore_terminal)
+            self._atexit_registered = True
         return self
 
     def stop(self, timeout: float = 1.0) -> KeyboardWatcher:
@@ -101,6 +109,14 @@ class KeyboardWatcher:
     # ------------------------------------------------------------------
 
     def _run(self) -> None:
+        try:
+            self._run_inner()
+        finally:
+            # The loop can end before stop() (EOF, read error, handler bug):
+            # undo cbreak here so the terminal is left usable either way.
+            self._restore_terminal()
+
+    def _run_inner(self) -> None:
         try:
             fd = self._stdin.fileno()
         except (AttributeError, OSError, ValueError):

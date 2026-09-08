@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from panopticon.core.clock import Clock
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import (
     MAX_TALKERS,
@@ -143,6 +144,42 @@ class TestSnapshots:
         assert store.snapshot_telemetry()["protocol_mix"]["tcp"] == 100.0
 
 
+class TestClockInjection:
+    class _FakeMonotonic:
+        def __init__(self, value=0.0):
+            self.value = value
+
+        def __call__(self):
+            return self.value
+
+    def test_prune_defaults_to_injected_clock(self):
+        clock = self._FakeMonotonic(1000.0)
+        store = StateStore(clock=Clock(clock))
+        # Seed the talker at the monotonic anchor; its pkt time is NOT the
+        # wall epoch, so a time.time()-based prune (the pre-9.5 behavior)
+        # would see 1.7e9 - 1000 ≈ forever and evict it immediately.
+        store.update(ev(1000.0, src="mid"), now=1000.0)
+        assert "mid" in store.snapshot_talkers()
+
+        clock.value = 1000.0 + TALKER_TTL / 2  # 150 s of true elapsed
+        assert store.prune() == 0
+        assert "mid" in store.snapshot_talkers()
+
+        clock.value = 1000.0 + TALKER_TTL + 1  # just past TTL
+        assert store.prune() == 1
+        assert "mid" not in store.snapshot_talkers()
+
+    def test_flush_velocity_defaults_to_injected_clock(self):
+        clock = self._FakeMonotonic(1.0)
+        store = StateStore(clock=Clock(clock))
+        store.update(ev(0.0), now=0.0)
+        store.flush_velocity()  # dt = 1.0 (last_flush 0.0) -> pps 0.1
+        clock.value = 2.0
+        store.update(ev(1.0), now=1.0)
+        store.flush_velocity()  # dt = 2.0 - 1.0 = 1.0 -> pps 0.9*0.1 + 0.1*1 = 0.19
+        assert store.snapshot_telemetry()["packets_per_sec"] == pytest.approx(0.19, abs=1e-3)
+
+
 class TestBoundedMemory:
     def test_stream_rolling_buffer_capped(self):
         store = StateStore()
@@ -199,11 +236,14 @@ class TestCounters:
         assert mix["icmp"] == 25.0
         assert mix["other"] == 0.0
 
-    def test_dropped_packet_counter(self):
+    def test_dropped_packet_counters_split_by_cause(self):
         store = StateStore()
-        store.increment_dropped()
-        store.increment_dropped(4)
-        assert store.snapshot_telemetry()["dropped_packets"] == 5
+        store.increment_parse_failure()
+        store.increment_queue_drop(4)
+        tele = store.snapshot_telemetry()
+        assert tele["parse_failures"] == 1
+        assert tele["queue_drops"] == 4
+        assert tele["dropped_packets"] == 5
 
 
 class TestTags:

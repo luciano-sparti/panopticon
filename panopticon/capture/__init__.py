@@ -6,6 +6,7 @@ from .sniffer import (
     auto_detect_interface,
     handle_packet,
     preflight,
+    validate_bpf_filter,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "auto_detect_interface",
     "handle_packet",
     "preflight",
+    "validate_bpf_filter",
 ]
