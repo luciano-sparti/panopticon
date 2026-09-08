@@ -90,14 +90,31 @@ Inspired by Jeremy Bentham's architectural concept of an all-seeing observation 
 
 ## 🚀 Installation
 
-### Prerequisites
+### 1. Quick Install (Linux / macOS)
 
-- **Python**: `3.9` or higher
-- **Privileges**: Elevated privileges for raw socket sniffing:
-  - **Linux / macOS**: Run with `sudo` or grant Linux capabilities.
-  - **Windows**: Install [Npcap](https://npcap.com/) (with *WinPcap API-compatible Mode* enabled) and run terminal as Administrator.
+Install the latest release with isolated dependencies and launcher binary in a single command:
 
-### From Source
+```bash
+curl -sSL https://raw.githubusercontent.com/luciano-sparti/panopticon/main/install.sh | bash
+```
+
+### 2. Via `pipx` (Isolated CLI Application)
+
+[`pipx`](https://pypa.github.io/pipx/) installs Panopticon into an isolated environment and adds the `panopticon` command directly to your `$PATH`:
+
+```bash
+pipx install panopticon
+# or from GitHub directly:
+pipx install git+https://github.com/luciano-sparti/panopticon.git
+```
+
+### 3. Via `uv`
+
+```bash
+uv tool install panopticon
+```
+
+### 4. From Source
 
 ```bash
 # 1. Clone the repository

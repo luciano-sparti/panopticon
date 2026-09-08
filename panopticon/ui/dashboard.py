@@ -18,7 +18,6 @@ from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
-from typing_extensions import Self
 
 from panopticon.core.store import StateStore
 
@@ -366,7 +365,7 @@ class Dashboard:
             self._live.stop()
             self._live = None
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> Dashboard:
         self.start()
         return self
 
