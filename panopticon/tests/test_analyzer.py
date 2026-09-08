@@ -8,7 +8,7 @@ signal handling, and shutdown telemetry.
 import json
 import signal
 
-from panopticon.analyzer import _load_tags, _save_tags, build_parser, main
+from panopticon.analyzer import _apply_config, _load_tags, _save_tags, build_parser, main
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
 
@@ -203,3 +203,55 @@ def test_main_custom_alert_path(monkeypatch, tmp_path, capsys):
     lines = alert_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["kind"] == "high_port"
+
+
+def _write_config(tmp_path, body):
+    cfg = tmp_path / "panopticon.toml"
+    cfg.write_text(body, encoding="utf-8")
+    return str(cfg)
+
+
+def _parse_config(parser, argv):
+    args = parser.parse_args(argv)
+    _apply_config(parser, args)
+    return args
+
+
+def test_config_file_provides_defaults(tmp_path):
+    cfg = _write_config(
+        tmp_path,
+        'syn-threshold = 50\nrefresh = 5\nresolve-hosts = true\nexport-pcap = "/tmp/x.pcap"\n',
+    )
+    args = _parse_config(build_parser(), ["--config", cfg])
+    assert args.syn_threshold == 50
+    assert args.refresh == 5.0
+    assert args.resolve_hosts is True
+    assert args.export_pcap == "/tmp/x.pcap"
+
+
+def test_cli_flag_beats_config_file(tmp_path):
+    cfg = _write_config(tmp_path, "refresh = 5\nsyn-threshold = 50\n")
+    args = _parse_config(
+        build_parser(), ["--config", cfg, "--refresh", "0.02", "--syn-threshold", "7"]
+    )
+    assert args.refresh == 0.02
+    assert args.syn_threshold == 7
+
+
+def test_missing_config_file_falls_back_to_defaults(tmp_path):
+    args = _parse_config(build_parser(), ["--config", str(tmp_path / "ghost.toml")])
+    assert args.refresh == 0.5
+    assert args.syn_threshold == 20
+
+
+def test_malformed_config_is_ignored(tmp_path, capsys):
+    cfg = _write_config(tmp_path, "this is not = toml [")
+    args = _parse_config(build_parser(), ["--config", cfg])
+    assert args.refresh == 0.5
+    assert "malformed config" in capsys.readouterr().err
+
+
+def test_config_applies_through_main(monkeypatch, tmp_path):
+    patch_healthy(monkeypatch)
+    cfg = _write_config(tmp_path, "refresh = 7\nsyn-threshold = 99\n")
+    assert main(make_args(tmp_path, ["--config", cfg])) == 0

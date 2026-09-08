@@ -26,6 +26,8 @@ import signal
 import sys
 import threading
 
+import tomllib
+
 from panopticon import __version__
 from panopticon.capture import Sniffer, auto_detect_interface, preflight, validate_bpf_filter
 from panopticon.core.clock import Clock
@@ -53,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="panopticon",
         description="Terminal real-time network traffic analyzer and mini-NIDS.",
+    )
+    parser.add_argument(
+        "--config",
+        default="panopticon.toml",
+        help="TOML config supplying default option values (default: %(default)s)",
     )
     parser.add_argument(
         "--version",
@@ -195,6 +202,60 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_config(path: str) -> dict:
+    """Load a TOML config file; missing/malformed files yield ``{}``."""
+    try:
+        with open(path, "rb") as fh:
+            return tomllib.load(fh)
+    except OSError:
+        return {}
+    except tomllib.TOMLDecodeError as exc:
+        print(f"panopticon: ignoring malformed config {path}: {exc}", file=sys.stderr)
+        return {}
+
+
+def _apply_config(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Merge TOML config values as defaults; explicit CLI flags always win.
+
+    A key only takes effect when the corresponding CLI flag was not given
+    (i.e. the parsed value still equals the built-in default). Both
+    ``syn-threshold`` and ``syn_threshold`` spellings are accepted and
+    values are coerced with the argparse action's declared type.
+    """
+    if not args.config:
+        return
+    cfg = _load_config(args.config)
+    if not cfg:
+        return
+    defaults = vars(parser.parse_args([]))
+    actions = {a.dest: a for a in parser._actions if a.dest not in (None, "help")}
+    applied: list[str] = []
+    for dest, cli_value in vars(args).items():
+        if dest == "config" or dest == "version":
+            continue
+        if cli_value != defaults[dest]:
+            continue  # explicit CLI flag beats the config file
+        action = actions.get(dest)
+        if action is None:
+            continue
+        value = cfg.get(dest, cfg.get(dest.replace("_", "-")))
+        if value is None:
+            continue
+        value_type = action.type
+        if callable(value_type) and not isinstance(value, bool):
+            try:
+                value = value_type(value)
+            except (TypeError, ValueError):
+                continue
+        setattr(args, dest, value)
+        applied.append(dest)
+    if applied:
+        print(
+            f"panopticon: config {args.config} set {', '.join(sorted(applied))}",
+            file=sys.stderr,
+        )
+
+
 def _load_tags(store: StateStore, path: str) -> None:
     """Load ``{ip: [tags]}`` JSON into the store (best-effort)."""
     try:
@@ -220,7 +281,9 @@ def _save_tags(store: StateStore, path: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    _apply_config(parser, args)
 
     interface = args.interface or auto_detect_interface()
     if not interface:

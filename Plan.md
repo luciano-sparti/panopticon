@@ -74,7 +74,7 @@ safety-net work lands before performance and feature work.
 - [x] **9.7** TLS SNI / DHCP hostname extraction in parser → meaningful names.
 - [x] **9.8** Flow/session tracking → FIN/NULL/Xmas scan detection.
 - [x] **9.9** New detectors: beaconing, bandwidth-abuse, port-knock.
-- [ ] **9.10** Config file (TOML) to replace nine hardcoded CLI flags.
+- [x] **9.10** Config file (TOML) to replace nine hardcoded CLI flags.
 
 ## Phase 9b — UI/UX improvements
 
