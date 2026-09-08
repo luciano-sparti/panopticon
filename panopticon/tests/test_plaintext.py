@@ -1,8 +1,8 @@
-"""Plaintext-detector tests using synthetic events / raw frames."""
+"""Plaintext-detector tests using synthetic events with payload bytes.
 
-from scapy.layers.inet import IP, TCP
-from scapy.layers.l2 import Ether
-from scapy.packet import Raw
+The detector reads the transport payload that the parser pre-extracts onto
+``PacketEvent.payload`` — it never dissects the raw frame itself.
+"""
 
 from panopticon.core.event import PacketEvent
 from panopticon.core.store import StateStore
@@ -10,8 +10,17 @@ from panopticon.detection.base import DetectorEngine
 from panopticon.detection.plaintext import PlaintextDetector
 
 
-def ev(t, src="10.0.0.1", dst="8.8.8.8", sport=40000, dport=80, service="http", proto="tcp"):
-    return PacketEvent(t, src, dst, proto, sport, dport, 100, service)
+def ev(
+    t,
+    src="10.0.0.1",
+    dst="8.8.8.8",
+    sport=40000,
+    dport=80,
+    service="http",
+    proto="tcp",
+    payload=b"",
+):
+    return PacketEvent(t, src, dst, proto, sport, dport, 100, service, payload=payload)
 
 
 def test_port_based_plaintext_warn():
@@ -53,90 +62,42 @@ def test_destination_port_plaintext_reports_direction():
     assert "to" in alert.summary
 
 
-def test_raw_none_path_is_noop_without_port_hit():
+def test_no_port_hit_or_payload_is_noop():
     detector = PlaintextDetector()
-    assert (
-        detector.process_event(
-            ev(1.0, dport=443, service="https"),
-            1.0,
-            raw=None,
-        )
-        is None
-    )
-    # Port tier still fires without raw payload.
-    assert (
-        detector.process_event(
-            ev(2.0, dport=80, service="http"),
-            2.0,
-            raw=None,
-        )
-        is not None
-    )
+    assert detector.process_event(ev(1.0, dport=443, service="https"), 1.0) is None
+    # Port tier still fires without payload.
+    assert detector.process_event(ev(2.0, dport=80, service="http"), 2.0) is not None
 
 
-def test_payload_marker_found_inside_real_frame():
+def test_payload_marker_found_in_event_payload():
     detector = PlaintextDetector()
-    frame = (
-        Ether()
-        / IP(src="1.2.3.4", dst="8.8.8.8")
-        / TCP(sport=40000, dport=443)
-        / Raw(b"GET /secret HTTP/1.1\r\n")
-    )
     alert = detector.process_event(
-        ev(1.0, dport=443, service="https"),
+        ev(1.0, dport=443, service="https", payload=b"GET /secret HTTP/1.1\r\n"),
         1.0,
-        raw=bytes(frame),
     )
     assert alert is not None
     assert alert.severity == "info"
 
 
-def test_payload_scan_ignores_marker_in_ip_headers():
+def test_ip_header_bytes_are_not_part_of_payload():
     detector = PlaintextDetector()
-    # Src IP "71.69.84.32" is "GET " and dst IP starts with 47 ('/'), so
-    # the header bytes literally contain b"GET /" without any payload.
-    frame = (
-        Ether()
-        / IP(src="71.69.84.32", dst="47.1.2.3")
-        / TCP(sport=40000, dport=443, flags="A")
-        / Raw(b"no markers")
-    )
-    raw = bytes(frame)
-    assert b"GET /" in raw
-    assert (
-        detector.process_event(
-            ev(1.0, dport=443, service="https"),
-            1.0,
-            raw=raw,
-        )
-        is None
-    )
+    # The raw head can contain b"GET /" (e.g. inside an IPv4 header), but
+    # only the transport payload carried on the event is scanned.
+    event = ev(1.0, dport=443, service="https", payload=b"no markers")
+    assert detector.process_event(event, 1.0, raw=b"GET /") is None
 
 
 def test_payload_scan_budget_applies_to_payload_only():
     detector = PlaintextDetector(max_scan_bytes=8)
-    frame = (
-        Ether()
-        / IP(src="1.2.3.4", dst="8.8.8.8")
-        / TCP(sport=40000, dport=443)
-        / Raw(b"abcdefghGET /x")
-    )
-    assert (
-        detector.process_event(
-            ev(1.0, dport=443, service="https"),
-            1.0,
-            raw=bytes(frame),
-        )
-        is None
-    )
+    event = ev(1.0, dport=443, service="https", payload=b"abcdefghGET /x")
+    assert detector.process_event(event, 1.0) is None
 
 
 def test_credential_marker_warn():
     detector = PlaintextDetector()
     alert = detector.process_event(
-        ev(1.0, dport=443, service="https"),
+        ev(1.0, dport=443, service="https", payload=b"USER alice\r\nPASS secret\r\n"),
         1.0,
-        raw=b"USER alice\r\nPASS secret\r\n",
     )
     assert alert is not None
     assert alert.kind == "plaintext"
@@ -146,9 +107,8 @@ def test_credential_marker_warn():
 def test_authorization_marker_warn():
     detector = PlaintextDetector()
     alert = detector.process_event(
-        ev(1.0, dport=443, service="https"),
+        ev(1.0, dport=443, service="https", payload=b"Authorization: Basic dXNlcjpwYXNz"),
         1.0,
-        raw=b"Authorization: Basic dXNlcjpwYXNz",
     )
     assert alert is not None
     assert alert.severity == "warn"
@@ -157,9 +117,8 @@ def test_authorization_marker_warn():
 def test_http_verb_marker_info():
     detector = PlaintextDetector()
     alert = detector.process_event(
-        ev(1.0, dport=443, service="https"),
+        ev(1.0, dport=443, service="https", payload=b"GET /index.html HTTP/1.1"),
         1.0,
-        raw=b"GET /index.html HTTP/1.1",
     )
     assert alert is not None
     assert alert.severity == "info"
@@ -169,9 +128,8 @@ def test_no_plaintext_no_marker_no_alert():
     detector = PlaintextDetector()
     assert (
         detector.process_event(
-            ev(1.0, dport=443, service="https"),
+            ev(1.0, dport=443, service="https", payload=b"\x00\x01\x02garbage"),
             1.0,
-            raw=b"\x00\x01\x02garbage",
         )
         is None
     )
@@ -179,11 +137,10 @@ def test_no_plaintext_no_marker_no_alert():
 
 def test_payload_gate_requires_marker():
     gated = PlaintextDetector(payload_gate=True)
-    assert gated.process_event(ev(1.0, dport=80), 1.0, raw=b"no markers") is None
+    assert gated.process_event(ev(1.0, dport=80), 1.0) is None
     alert = gated.process_event(
-        ev(1.0, dport=80),
+        ev(1.0, dport=80, payload=b"GET /index HTTP/1.1"),
         1.0,
-        raw=b"GET /index HTTP/1.1",
     )
     assert alert is not None
     assert alert.severity == "warn"
@@ -193,12 +150,21 @@ def test_scan_is_limited_to_head_bytes():
     detector = PlaintextDetector(max_scan_bytes=8)
     assert (
         detector.process_event(
-            ev(1.0, dport=443, service="https"),
+            ev(1.0, dport=443, service="https", payload=b"abcdefghGET /index HTTP/1.1"),
             1.0,
-            raw=b"abcdefghGET /index HTTP/1.1",
         )
         is None
     )
+
+
+def test_multiple_markers_first_wins():
+    detector = PlaintextDetector()
+    alert = detector.process_event(
+        ev(1.0, dport=443, service="https", payload=b"PASS x\r\nGET /y"),
+        1.0,
+    )
+    assert alert is not None
+    assert "PASS" in alert.summary
 
 
 def test_engine_dedups_plaintext_per_source():

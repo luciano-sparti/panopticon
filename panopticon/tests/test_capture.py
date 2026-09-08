@@ -61,6 +61,18 @@ def test_handle_packet_parses_and_enqueues():
     assert store.snapshot_telemetry()["dropped_packets"] == 0
 
 
+def test_handle_packet_prefers_original_wire_bytes():
+    q = queue.Queue()
+    store = StateStore()
+    frame = pkt()
+    frame.original = b"\x00" * 14 + b"not-what-rebuild-produces"
+    handle_packet(q, store, frame)
+    raw, event = q.get_nowait()
+    assert raw == frame.original
+    assert raw != bytes(pkt())
+    assert event.src == "1.2.3.4"
+
+
 def test_handle_packet_counts_dropped_when_queue_full():
     q = queue.Queue(maxsize=1)
     store = StateStore()

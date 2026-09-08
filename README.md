@@ -8,7 +8,7 @@
 
 ## Current Status
 
-- ✅ **Phases 1–6 Complete + Enhanced UI/UX** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, threat detection engine (SYN-scan, plaintext, and high-port heuristics), alert JSONL exporter (`session.alerts.jsonl`), Rich terminal interactive dashboard with freeze (`Space`), metric toggle (`m`), panel zoom (`1`–`4`), deep-dive Host Inspector (`Enter`), selector/pin/tag/kill, and automatic `self:` tagging — **204 unit/integration tests passing**.
+- ✅ **Phases 1–8 Complete + Enhanced UI/UX** — Core capture sniffer (`Scapy`), metadata parser, thread-safe `StateStore`, streaming PCAP & CSV exporters, pipeline worker, CLI entry point, threat detection engine (SYN-scan, plaintext, and high-port heuristics), alert JSONL exporter (`session.alerts.jsonl`), Rich terminal interactive dashboard with freeze (`Space`), metric toggle (`m`), panel zoom (`1`–`4`), deep-dive Host Inspector (`Enter`), selector/pin/tag/kill, and automatic `self:` tagging — **222 unit/integration tests passing**. Phase 8 tuned hot paths: payload extracted once at parse time (no detector re-dissection), copy-on-write store snapshots, a shared bounded-LRU eviction helper, EWMA velocity folded once per refresh tick, and PCAP exports of exact wire bytes (`pkt.original`).
 
 
 ---

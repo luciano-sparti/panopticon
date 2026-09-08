@@ -1,5 +1,7 @@
 """Tests for StateStore: EWMA math, snapshots, eviction, counters."""
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from panopticon.core.event import PacketEvent
@@ -11,55 +13,92 @@ from panopticon.core.store import (
 )
 
 
-def ev(timestamp, src="10.0.0.1", dst="10.0.0.2", proto="tcp", sport=1000, dport=80, size=100):
-    return PacketEvent(timestamp, src, dst, proto, sport, dport, size, "http")
+def ev(
+    timestamp,
+    src="10.0.0.1",
+    dst="10.0.0.2",
+    proto="tcp",
+    sport=1000,
+    dport=80,
+    size=100,
+    payload=b"",
+):
+    return PacketEvent(
+        timestamp, src, dst, proto, sport, dport, size, service="http", payload=payload
+    )
 
 
 class TestVelocityEWMA:
+    """Velocity math is driven by per-tick accumulation + flush (8.4).
+
+    Updates accumulate packet/byte counts; ``flush_velocity(now)`` folds
+    them into the EWMA once per refresh tick. The first flush only records
+    the baseline (and seeds ``avg_packet_size`` exactly); velocity blends
+    start on the second flush. Tests mirror the analyzer cadence:
+    update(s) during the tick, then flush at the tick boundary.
+    """
+
     def test_ewma_pps_and_bytes_sec(self):
         store = StateStore()
-        for t in (0.0, 1.0, 2.0):
-            store.update(ev(t), now=t)
+        store.update(ev(0.0), now=0.0)
+        store.flush_velocity(now=1.0)  # dt=1 -> pps = 0.1*1 = 0.1 ; bps = 0.1*100 = 10
+        store.update(ev(1.0), now=1.0)
+        store.flush_velocity(now=2.0)  # dt=1 -> pps = 0.9*0.1 + 0.1*1 = 0.19
+        store.update(ev(2.0), now=2.0)
+        store.flush_velocity(now=3.0)  # dt=1 -> pps = 0.9*0.19 + 0.1*1 = 0.271
 
         tele = store.snapshot_telemetry()
-        # t=1: pps = 0.9*0 + 0.1*(1/1) = 0.1 ; bytes/sec = 0.9*0 + 0.1*(100/1) = 10
-        # t=2: pps = 0.9*0.1 + 0.1*(1/1) = 0.19 ; bytes/sec = 0.9*10 + 0.1*(100/1) = 19
-        assert tele["packets_per_sec"] == pytest.approx(0.19, abs=1e-3)
-        assert tele["bytes_per_sec"] == pytest.approx(19.0, abs=1e-3)
+        assert tele["packets_per_sec"] == pytest.approx(0.271, abs=1e-3)
+        assert tele["bytes_per_sec"] == pytest.approx(27.1, abs=1e-3)
 
     def test_ewma_avg_packet_size(self):
         store = StateStore()
         for t in (0.0, 1.0, 2.0):
             store.update(ev(t, size=100), now=t)
-        # init = 100; then stays 100 via 0.9/0.1 blend of identical samples.
+            store.flush_velocity(now=t + 1.0)
+        # seeded = 100; stays 100 via the 0.9/0.1 blend of identical samples.
         assert store.snapshot_telemetry()["avg_packet_size"] == pytest.approx(100.0)
 
     def test_ewma_avg_size_responds_to_size_change(self):
         store = StateStore()
         store.update(ev(0.0, size=100), now=0.0)
+        store.flush_velocity(now=1.0)  # seeds avg = 100
         store.update(ev(1.0, size=200), now=1.0)
-        # avg = 0.9*100 + 0.1*200 = 110
+        store.flush_velocity(now=2.0)  # avg = 0.9*100 + 0.1*200 = 110
         assert store.snapshot_telemetry()["avg_packet_size"] == pytest.approx(110.0)
 
     def test_constant_packet_rate_is_stable(self):
         store = StateStore()
         for i in range(50):
             store.update(ev(float(i)), now=float(i))
-        # Converges toward ~1.0 pps for a 1 packet/sec stream.
+            store.flush_velocity(now=float(i) + 1.0)
+        # One packet per 1 s tick each flush -> converges toward ~1.0 pps.
         assert store.snapshot_telemetry()["packets_per_sec"] == pytest.approx(1.0, abs=0.1)
+
+    def test_idle_tick_does_not_decay_rate(self):
+        store = StateStore()
+        store.update(ev(0.0), now=0.0)
+        store.flush_velocity(now=1.0)
+        store.flush_velocity(now=2.0)  # idle: 1 full second, no packets
+        store.flush_velocity(now=3.0)  # idle
+        # No packets arrived, so the rate is untouched (frozen, not decayed).
+        assert store.snapshot_telemetry()["packets_per_sec"] == pytest.approx(0.1, abs=1e-3)
 
     def test_zero_delta_burst_updates_velocity(self):
         store = StateStore()
+        store.flush_velocity(now=0.0)  # idle tick: baseline only
         store.update(ev(0.0), now=0.0)
-        store.update(ev(0.0), now=0.0)  # same timestamp: dt is clamped, not skipped
+        store.update(ev(0.0), now=0.0)  # same-tick burst accumulates
+        store.flush_velocity(now=0.0)  # dt clamped to eps: burst read as one tick
         tele = store.snapshot_telemetry()
-        assert tele["packets_per_sec"] == pytest.approx(1e5, rel=1e-3)
-        assert tele["bytes_per_sec"] == pytest.approx(1e7, rel=1e-3)
+        # 2 packets in ~1e-6 s -> inst_pps = 2e6; EWMA x 0.1 = 2e5.
+        assert tele["packets_per_sec"] == pytest.approx(2e5, rel=1e-3)
+        assert tele["bytes_per_sec"] == pytest.approx(2e7, rel=1e-3)
         assert tele["avg_packet_size"] == pytest.approx(100.0)
 
 
 class TestSnapshots:
-    def test_talker_snapshot_is_deep_copy(self):
+    def test_talker_snapshot_is_independent_copy(self):
         store = StateStore()
         store.update(ev(0.0, src="1.1.1.1"), now=0.0)
 
@@ -71,6 +110,15 @@ class TestSnapshots:
         assert fresh["1.1.1.1"]["pkts"] == 1
         assert fresh["1.1.1.1"]["bytes"] == 100
 
+    def test_talker_snapshot_added_tags_do_not_leak_back(self):
+        store = StateStore()
+        store.update(ev(0.0, src="1.1.1.1"), now=0.0)
+
+        snap = store.snapshot_talkers()
+        snap["1.1.1.1"]["tags"].append("forged")
+
+        assert store.snapshot_tags().get("1.1.1.1") is None
+
     def test_stream_snapshot_is_independent_list(self):
         store = StateStore()
         store.update(ev(0.0), now=0.0)
@@ -79,7 +127,14 @@ class TestSnapshots:
         snap.clear()
         assert len(store.snapshot_stream()) == 1
 
-    def test_telemetry_snapshot_is_deep_copy(self):
+    def test_stream_snapshot_events_are_immutable_references(self):
+        store = StateStore()
+        store.update(ev(0.0, payload=b"GET /"), now=0.0)
+        event = store.snapshot_stream()[0]
+        with pytest.raises(FrozenInstanceError):
+            event.summary = "mutated"  # frozen dataclass enforced at runtime
+
+    def test_telemetry_snapshot_is_independent_copy(self):
         store = StateStore()
         store.update(ev(0.0, src="1.1.1.1"), now=0.0)
 

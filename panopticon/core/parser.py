@@ -70,6 +70,7 @@ def parse(pkt: Packet) -> PacketEvent:
     sport = 0
     dport = 0
     flags = ""
+    payload = b""
 
     try:
         tcp = pkt.getlayer(TCP)
@@ -86,6 +87,10 @@ def parse(pkt: Packet) -> PacketEvent:
             flags = str(tcp.flags)
         except Exception:  # noqa: BLE001
             sport, dport, flags = 0, 0, ""
+        try:
+            payload = bytes(tcp.payload)
+        except Exception:  # noqa: BLE001
+            payload = b""
     elif udp is not None:
         proto = "udp"
         try:
@@ -93,8 +98,16 @@ def parse(pkt: Packet) -> PacketEvent:
             dport = int(udp.dport)
         except Exception:  # noqa: BLE001
             sport, dport = 0, 0
+        try:
+            payload = bytes(udp.payload)
+        except Exception:  # noqa: BLE001
+            payload = b""
     elif icmp is not None:
         proto = "icmp"
+        try:
+            payload = bytes(icmp.payload)
+        except Exception:  # noqa: BLE001
+            payload = b""
 
     service = service_for_port(dport) if dport else ""
     return PacketEvent(
@@ -107,6 +120,7 @@ def parse(pkt: Packet) -> PacketEvent:
         size=size,
         service=service,
         flags=flags,
+        payload=payload,
     )
 
 

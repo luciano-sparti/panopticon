@@ -23,8 +23,9 @@ class BaseDetector(ABC):
     """Abstract anomaly detector.
 
     Subclasses implement ``process_event`` to inspect every captured
-    ``PacketEvent`` (plus the raw frame when payload inspection is needed)
-    and return an ``AlertEvent`` when suspicious traffic is found.
+    ``PacketEvent`` (transport payload is pre-extracted on ``event.payload``;
+    the raw frame is still passed through for interface compatibility) and
+    return an ``AlertEvent`` when suspicious traffic is found.
 
     ``engine_cooldown`` overrides the engine-wide dedup cooldown for this
     detector:

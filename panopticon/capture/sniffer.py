@@ -193,7 +193,10 @@ def handle_packet(
         return
     try:
         event = parse(pkt)
-        raw = bytes(pkt)
+        # Prefer the exact wire bytes libpcap delivered (PCAP fidelity);
+        # fall back to re-serialization for synthetic/build piped packets
+        # where ``pkt.original`` is empty.
+        raw = pkt.original or bytes(pkt)
     except Exception:  # noqa: BLE001 - one bad frame must not stop capture
         store.increment_dropped()
         return

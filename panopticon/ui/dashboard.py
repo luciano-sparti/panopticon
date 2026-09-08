@@ -1,7 +1,7 @@
 """Rich ``Layout`` + ``Live`` dashboard built from ``StateStore`` snapshots.
 
 The dashboard never calls the store's mutation API: every refresh it pulls
-deep-copied snapshots (``StateStore.snapshot_*``) and renders them. It is
+fresh, copy-on-write snapshots (``StateStore.snapshot_*``) and renders them. It is
 safe with an empty store and when stdout is not a terminal (headless/CI,
 failed capture): Rich's ``Live`` degrades to a no-op there instead of
 raising, so the analyzer never crashes because of the UI.

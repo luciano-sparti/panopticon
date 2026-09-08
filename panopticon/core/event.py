@@ -26,6 +26,9 @@ class PacketEvent:
             empty string when unknown.
         flags: TCP control flags string (e.g. "S", "SA", "R"), or empty
             string for non-TCP traffic.
+        payload: Transport-layer payload bytes (everything after the L4
+            header), or empty bytes when unavailable. Extracted once at
+            parse time so detectors do not re-dissect the raw frame.
     """
 
     timestamp: float
@@ -37,6 +40,7 @@ class PacketEvent:
     size: int
     service: str
     flags: str = ""
+    payload: bytes = b""
 
 
 @dataclass(frozen=True)

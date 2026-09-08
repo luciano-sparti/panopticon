@@ -10,6 +10,7 @@ entry cap, mirroring the top-talker housekeeping in the state store.
 from __future__ import annotations
 
 from ..core.event import EPHEMERAL_PORT, AlertEvent, PacketEvent
+from ..core.lru import evict_lru
 from .base import BaseDetector
 
 # Seconds a flow is silenced after raising an alert.
@@ -81,6 +82,4 @@ class HighPortDetector(BaseDetector):
         return removed
 
     def _evict_if_needed(self) -> None:
-        while len(self._last_alert) > self._max_entries:
-            oldest = min(self._last_alert, key=lambda key: self._last_alert[key])
-            del self._last_alert[oldest]
+        evict_lru(self._last_alert, last_seen=self._last_alert.__getitem__, cap=self._max_entries)

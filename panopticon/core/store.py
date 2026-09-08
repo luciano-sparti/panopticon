@@ -2,13 +2,14 @@
 
 All shared state (rolling stream buffer, top talkers, EWMA velocity
 metrics, protocol mix, dropped-packet counter) lives here behind a single
-``threading.RLock``. Snapshot methods return deep copies so the UI thread
-never shares mutable references with the pipeline worker.
+``threading.RLock``. Snapshot methods return short-lived copies:
+frozen-dataclass events (with immutable ``payload`` bytes) are handed out as
+list copies, mutable talker records are shallow-copied per row, so the UI
+thread never mutates store-owned state and never pays for deep copies.
 """
 
 from __future__ import annotations
 
-import copy
 import threading
 import time
 from collections import deque
@@ -16,6 +17,7 @@ from collections.abc import Iterable
 
 from . import identity
 from .event import AlertEvent, PacketEvent
+from .lru import evict_lru
 
 # Rolling stream buffer length (kept on-screen / in UI).
 STREAM_MAXLEN = 500
@@ -29,9 +31,9 @@ TALKER_TTL = 300
 EWMA_ALPHA = 0.9
 EWMA_BETA = 0.1
 
-# Minimum inter-packet delta (seconds) used for velocity estimates; clamps
-# same-timestamp bursts so instantaneous rates stay finite instead of the
-# EWMA freezing while the timestamp never advances.
+# Minimum inter-flush delta (seconds) used for velocity estimates; clamps
+# same-tick flushes so instantaneous rates stay finite instead of the EWMA
+# freezing while the timestamp never advances.
 MIN_DT_EPSILON = 1e-6
 
 # Protocol buckets for the protocol-mix percentages.
@@ -69,12 +71,16 @@ class StateStore:
         )
         self._self_host = self_host if self_host is not None else identity.hostname()
 
-        # EWMA velocity state.
+        # EWMA velocity state, folded once per refresh tick (flush_velocity).
         self._pps = 0.0
         self._bytes_sec = 0.0
         self._avg_size = 0.0
-        self._last_update: float = 0.0
         self._velocity_init = False
+        self._last_flush: float = 0.0
+        # Per-tick accumulation, drained by flush_velocity.
+        self._acc_pkts = 0
+        self._acc_bytes = 0
+        self._acc_size_sum = 0
 
     # ------------------------------------------------------------------
     # Mutation API (called by the pipeline worker thread)
@@ -110,7 +116,9 @@ class StateStore:
             if event.dst in self._self_ips:
                 self._tag_self(event.dst)
 
-            self._update_velocity(ts, event.size)
+            self._acc_pkts += 1
+            self._acc_bytes += event.size
+            self._acc_size_sum += event.size
 
     def update_many(self, events, now: float | None = None) -> None:
         """Record multiple events in one lock acquisition."""
@@ -122,6 +130,34 @@ class StateStore:
         """Atomically increment the dropped-packet counter."""
         with self._lock:
             self._dropped += count
+
+    def flush_velocity(self, now: float | None = None) -> None:
+        """Fold per-tick accumulated counters into the EWMA velocity state.
+
+        Called once per refresh tick (see ``analyzer.main``) instead of on
+        every packet, so instantaneous rates reflect whole ticks rather than
+        the gap between two consecutive packets. Idle ticks (no packets) only
+        advance the baseline timestamp; an idle gap must not drag the rate
+        toward zero while nothing arrives. ``avg_packet_size`` is the one
+        value seeded exactly: it measures sample means, so the EWMA warm-up
+        must not halve its first sample.
+        """
+        ts = time.time() if now is None else now
+        with self._lock:
+            dt = max(ts - self._last_flush, MIN_DT_EPSILON)
+            if self._acc_pkts:
+                self._pps = EWMA_ALPHA * self._pps + EWMA_BETA * (self._acc_pkts / dt)
+                self._bytes_sec = EWMA_ALPHA * self._bytes_sec + EWMA_BETA * (self._acc_bytes / dt)
+                avg = self._acc_size_sum / self._acc_pkts
+                if self._velocity_init:
+                    self._avg_size = EWMA_ALPHA * self._avg_size + EWMA_BETA * avg
+                else:
+                    self._avg_size = avg
+                    self._velocity_init = True
+            self._last_flush = ts
+            self._acc_pkts = 0
+            self._acc_bytes = 0
+            self._acc_size_sum = 0
 
     def add_alert(self, alert: AlertEvent) -> None:
         """Append a detector alert to the rolling buffer and counter."""
@@ -171,38 +207,46 @@ class StateStore:
             return len(stale)
 
     # ------------------------------------------------------------------
-    # Snapshot API (UI thread) - deep copies, never shared references
+    # Snapshot API (UI thread) - short-lived copies, never shared mutables
     # ------------------------------------------------------------------
 
     def snapshot_stream(self) -> list[PacketEvent]:
-        """Deep-copied list of the most recent ``STREAM_MAXLEN`` events."""
-        with self._lock:
-            return copy.deepcopy(list(self._stream))
+        """Copy of the rolling stream buffer.
 
-    def snapshot_alerts(self) -> list[AlertEvent]:
-        """Deep-copied list of the most recent ``ALERTS_MAXLEN`` alerts."""
-        with self._lock:
-            return copy.deepcopy(list(self._alerts))
-
-    def snapshot_talkers(self) -> dict[str, dict]:
-        """Deep-copied top-talker map with tags merged in.
-
-        Each entry: ``{"pkts", "bytes", "last_seen", "tags": [...]}``.
+        Events are frozen dataclasses (including the immutable ``payload``
+        bytes), so a list copy is a safe, reference-sharing snapshot.
         """
         with self._lock:
-            snap = copy.deepcopy(self._top_talkers)
+            return list(self._stream)
+
+    def snapshot_alerts(self) -> list[AlertEvent]:
+        """Copy of the rolling alert buffer (frozen dataclasses)."""
+        with self._lock:
+            return list(self._alerts)
+
+    def snapshot_talkers(self) -> dict[str, dict]:
+        """Copy of the top-talker map with tags merged in.
+
+        Each entry: ``{"pkts", "bytes", "last_seen", "tags": [...]}``.
+
+        Inner talker records are small mutable dicts owned by the worker;
+        each is shallow-copied here (scalar values only) so the UI gets its
+        own record to mutate with no deep-copy cost.
+        """
+        with self._lock:
+            snap = {ip: dict(talker) for ip, talker in self._top_talkers.items()}
             for ip, talker in snap.items():
                 tags = self._tags.get(ip)
                 talker["tags"] = sorted(tags) if tags else []
             return snap
 
     def snapshot_tags(self) -> dict[str, list[str]]:
-        """Deep-copied tag map: ``{ip: [tags]}`` (for ``--tags-file``)."""
+        """Copy of the tag map: ``{ip: [tags]}`` (for ``--tags-file``)."""
         with self._lock:
             return {ip: sorted(tags) for ip, tags in self._tags.items()}
 
     def tags_for(self, ip: str) -> set[str]:
-        """Deep-copied set of tags currently attached to ``ip``."""
+        """Copy of the set of tags currently attached to ``ip``."""
         with self._lock:
             return set(self._tags.get(ip, ()))
 
@@ -228,7 +272,7 @@ class StateStore:
             }
 
     def snapshot_telemetry(self) -> dict:
-        """Deep-copied telemetry summary (velocity, mix, counters)."""
+        """Fresh telemetry summary (velocity, mix, counters)."""
         with self._lock:
             total = self._total_packets or 1
             mix = {
@@ -259,19 +303,9 @@ class StateStore:
             tag = f"self:{self._self_host}"
         self._tags.setdefault(ip, set()).add(tag)
 
-    def _update_velocity(self, ts: float, size: int) -> None:
-        if self._velocity_init:
-            dt = max(ts - self._last_update, MIN_DT_EPSILON)
-            inst_pps = 1.0 / dt
-            inst_bps = size / dt
-            self._pps = EWMA_ALPHA * self._pps + EWMA_BETA * inst_pps
-            self._bytes_sec = EWMA_ALPHA * self._bytes_sec + EWMA_BETA * inst_bps
-            self._avg_size = EWMA_ALPHA * self._avg_size + EWMA_BETA * size
-        else:
-            self._avg_size = float(size)
-            self._velocity_init = True
-        self._last_update = ts
-
     def _evict_lru_talker(self) -> None:
-        oldest_ip = min(self._top_talkers, key=lambda ip: self._top_talkers[ip]["last_seen"])
-        del self._top_talkers[oldest_ip]
+        evict_lru(
+            self._top_talkers,
+            last_seen=lambda ip: self._top_talkers[ip]["last_seen"],
+            cap=MAX_TALKERS,
+        )

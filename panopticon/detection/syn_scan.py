@@ -13,6 +13,7 @@ source's window so a flood cannot re-trigger instantly.
 from __future__ import annotations
 
 from ..core.event import AlertEvent, PacketEvent
+from ..core.lru import evict_lru
 from .base import BaseDetector
 
 # Distinct unresponded targets that trigger a scan alert (strictly more than).
@@ -135,7 +136,9 @@ class SynScanDetector(BaseDetector):
                 del pending[key]
 
     def _evict_sources_if_needed(self) -> None:
-        while len(self._pending) > self._max_sources:
-            oldest = min(self._source_last, key=lambda src: self._source_last[src])
-            self._pending.pop(oldest, None)
-            self._source_last.pop(oldest, None)
+        evict_lru(
+            self._pending,
+            last_seen=self._source_last.__getitem__,
+            cap=self._max_sources,
+            on_evict=lambda src: self._source_last.pop(src, None),
+        )

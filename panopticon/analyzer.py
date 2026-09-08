@@ -260,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
                     file=sys.stderr,
                 )
                 reported_worker_errors = worker.error_count
+            store.flush_velocity(now)
             store.prune(now)
             worker.prune(now)
 
@@ -306,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.tags_file:
             _save_tags(store, args.tags_file)
 
+    store.flush_velocity(time.time())
     telemetry = store.snapshot_telemetry()
     print(
         f"panopticon: stopped — {telemetry['total_packets']} packets, "

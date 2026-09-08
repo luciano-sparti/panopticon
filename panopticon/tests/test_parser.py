@@ -29,6 +29,7 @@ def test_tcp_http_parsing():
     assert ev.service == "http"
     assert ev.timestamp == 1234.5
     assert ev.size == len(bytes(pkt))
+    assert ev.payload == b"GET /"
 
 
 def test_tcp_ephemeral_dport_maps_to_ephemeral_service():
@@ -67,6 +68,18 @@ def test_icmp_parsing_has_zero_ports():
     assert ev.sport == 0
     assert ev.dport == 0
     assert ev.service == ""
+
+
+def test_payload_extracted_once_per_transport_proto():
+    tcp = parse(make(Ether() / IP() / TCP(sport=1, dport=80) / Raw(b"tcp-payload")))
+    udp = parse(make(Ether() / IP() / UDP(sport=1, dport=53) / Raw(b"udp-payload")))
+    icmp = parse(make(Ether() / IP() / ICMP(type=8, code=0) / Raw(b"") / Raw(b"icmp-payload")))
+    assert tcp.payload == b"tcp-payload"
+    assert udp.payload == b"udp-payload"
+    assert icmp.payload == b"icmp-payload"
+    # No payload -> empty bytes, not None.
+    empty = parse(make(Ether() / IP(src="1.1.1.1", dst="2.2.2.2") / TCP(sport=1, dport=80)))
+    assert empty.payload == b""
 
 
 def test_ipv6_tcp_parsing():

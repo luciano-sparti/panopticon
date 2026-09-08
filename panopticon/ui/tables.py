@@ -1,6 +1,6 @@
 """StateStore snapshot -> Rich renderable renderers.
 
-Every renderer takes a deep-copied snapshot from ``StateStore.snapshot_*``
+Every renderer takes a copy-on-write snapshot from ``StateStore.snapshot_*``
 and returns a ``rich`` renderable (a ``Table``). Renderers never touch the
 store or its mutation API and never block on pipeline state, so they are
 safe to call from the UI refresh thread at any cadence.
@@ -151,7 +151,7 @@ def render_top_talkers(
 ) -> Table:
     """Render the busiest hosts with ASCII block activity bars.
 
-    ``talkers`` is the deep copy returned by ``StateStore.snapshot_talkers``.
+    ``talkers`` is the (shallow) copy returned by ``StateStore.snapshot_talkers``.
     Pinned talkers sort to the top (with a mini-telemetry caption) and the
     currently selected host is highlighted. ``rates`` maps ip -> bytes/sec
     (computed by the Dashboard between refresh ticks); ``bar_peak`` overrides

@@ -47,16 +47,16 @@ safety-net work lands before performance and feature work.
 
 ## Phase 8 — Performance
 
-- [ ] **8.1** Stop double dissection: carry payload bytes on `PacketEvent`
+- [x] **8.1** Stop double dissection: carry payload bytes on `PacketEvent`
   once in `core/parser.py`; drop `PlaintextDetector` re-parse of raw bytes
   (`detection/plaintext.py:_dissect`). Biggest CPU win.
-- [ ] **8.2** Replace `copy.deepcopy` snapshots with shallow copies
+- [x] **8.2** Replace `copy.deepcopy` snapshots with shallow copies
   (`core/store.py` snapshot methods; frozen dataclasses only).
-- [ ] **8.3** Extract shared bounded-LRU utility; replace triplicated O(n)
+- [x] **8.3** Extract shared bounded-LRU utility; replace triplicated O(n)
   eviction scans (`store.py`, `syn_scan.py`, `high_port.py`).
-- [ ] **8.4** Smooth EWMA: accumulate counts, update once per refresh tick
+- [x] **8.4** Smooth EWMA: accumulate counts, update once per refresh tick
   instead of per-packet `1/dt` (`core/store.py`).
-- [ ] **8.5** PCAP fidelity: write `pkt.original` wire bytes instead of
+- [x] **8.5** PCAP fidelity: write `pkt.original` wire bytes instead of
   re-serialized `bytes(pkt)` (`capture/sniffer.py`).
 
 ## Phase 9 — Robustness & features
