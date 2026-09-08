@@ -12,6 +12,7 @@
 ### A real-time terminal network traffic analyzer and lightweight intrusion detection system (NIDS).
 
 [![CI](https://github.com/Luciano-Sparti/panopticon/actions/workflows/ci.yml/badge.svg)](https://github.com/Luciano-Sparti/panopticon/actions/workflows/ci.yml)
+[![Ko-fi](https://img.shields.io/badge/Support-Ko--fi-F16061?logo=ko-fi&logoColor=white)](https://ko-fi.com/lucianosp)
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![Built with Rich](https://img.shields.io/badge/TUI-Rich-magenta.svg)](https://rich.readthedocs.io/)
 [![Powered by Scapy](https://img.shields.io/badge/Capture-Scapy%202.5%2B-red.svg)](https://scapy.net/)
@@ -21,6 +22,9 @@
 <br/>
 
 > *All traffic observed. Anomalies highlighted. Threats contained.*
+
+> **A note on the name.** Conceived by 18th-century philosopher Jeremy Bentham, the **Panopticon** was an architectural design for an inspection house — an observation tower from which a single watchman could observe every cell simultaneously without being seen.  
+> Panopticon adopts the name for terminal network monitoring: a single, central vantage point where all packet flows, protocol anomalies, and stealth probes across your machine are continuously illuminated in real time.
 
 <br/>
 
@@ -38,7 +42,7 @@
 
 **Panopticon** is an interactive, multi-pane terminal network traffic analyzer and lightweight Network Intrusion Detection System (NIDS) built with Python, Scapy, and Rich.
 
-Inspired by Jeremy Bentham's architectural concept of an all-seeing observation tower, Panopticon provides a single, unified vantage point over your system's network activity. Without leaving your terminal, you can watch real-time packet flows, track top-talker telemetry, inspect protocol distributions, catch stealth port scans and cleartext credential leaks, and investigate individual hosts in forensic detail.
+It gives system administrators, security engineers, and developers an immediate, zero-overhead window into raw network traffic directly inside the terminal. Without the weight of desktop GUIs like Wireshark or the fragmented output of raw `tcpdump` streams, Panopticon aggregates live packet streams, top-talker bandwidth telemetry, protocol velocity, and heuristic security alerts into a unified, keyboard-driven dashboard.
 
 ---
 
@@ -362,6 +366,12 @@ Contributions, bug reports, and suggestions are welcome!
 3. Install development dependencies: `pip install ".[dev]"`
 4. Run tests and lint checks: `pytest && ruff check panopticon && mypy panopticon`
 5. Open a pull request against `main`.
+
+---
+
+## ☕ Support
+
+If Panopticon saved you time, caught network anomalies, or made your terminal workflow smoother, you can [support me on Ko-fi](https://ko-fi.com/lucianosp) — it helps keep open-source development active! 🙏
 
 ---
 

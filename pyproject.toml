@@ -43,6 +43,7 @@ Homepage = "https://github.com/luciano-sparti/panopticon"
 Repository = "https://github.com/luciano-sparti/panopticon.git"
 Issues = "https://github.com/luciano-sparti/panopticon/issues"
 Documentation = "https://github.com/luciano-sparti/panopticon#readme"
+Funding = "https://ko-fi.com/lucianosp"
 
 [project.optional-dependencies]
 dev = [
