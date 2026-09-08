@@ -1,5 +1,0 @@
-# Development tooling on top of the runtime requirements.
--r requirements.txt
-mypy>=1.10.0,<4
-pytest>=7.0.0,<10
-ruff>=0.6.0,<1

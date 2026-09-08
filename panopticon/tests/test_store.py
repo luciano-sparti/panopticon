@@ -109,6 +109,18 @@ class TestVelocityEWMA:
         assert tele["avg_packet_size"] == pytest.approx(100.0)
 
 
+    def test_initial_velocity_with_injected_clock(self):
+        # When created at monotonic t0=100.0, a first flush at t1=100.5 evaluates dt=0.5
+        clock = TestClockInjection._FakeMonotonic(100.0)
+        store = StateStore(clock=Clock(clock))
+        store.update(ev(100.2), now=100.2)
+        clock.value = 100.5
+        store.flush_velocity()  # dt = 0.5 -> inst_pps = 1 / 0.5 = 2.0 -> EWMA pps = 0.2
+        tele = store.snapshot_telemetry()
+        assert tele["packets_per_sec"] == pytest.approx(0.2, abs=1e-3)
+        assert tele["bytes_per_sec"] == pytest.approx(20.0, abs=1e-3)
+
+
 class TestSnapshots:
     def test_talker_snapshot_is_independent_copy(self):
         store = StateStore()
@@ -271,6 +283,18 @@ class TestSessions:
         assert len(sessions) == 1
         assert sessions[0]["state"] == "active"
         assert sessions[0]["proto"] == "udp"
+
+    def test_snapshot_sessions_limit_nlargest(self):
+        store = StateStore()
+        for i in range(10):
+            store.update(
+                ev(float(i), src="10.0.0.1", dst=f"8.8.8.{i}", sport=1000 + i, dport=80, flags="S"),
+                now=float(i),
+            )
+        # Total 10 sessions; request top 3
+        top3 = store.snapshot_sessions(limit=3)
+        assert len(top3) == 3
+        assert [s["dst"] for s in top3] == ["8.8.8.9", "8.8.8.8", "8.8.8.7"]
 
 
 class TestCounters:

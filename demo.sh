@@ -27,7 +27,7 @@ if [[ ! -d "$VENV_DIR" ]]; then
   "$PY" -m venv "$VENV_DIR"
   # shellcheck disable=SC1091
   source "$VENV_DIR/bin/activate"
-  pip install --quiet -r requirements.txt
+  pip install --quiet ".[dev]"
 elif [[ -f "$VENV_DIR/bin/activate" ]]; then
   # shellcheck disable=SC1091
   source "$VENV_DIR/bin/activate"
@@ -35,7 +35,7 @@ elif [[ -f "$VENV_DIR/bin/activate" ]]; then
   # (the import check is local; no network is touched when already satisfied).
   if ! "$VENV_DIR/bin/python" -c 'import scapy, pytest, rich' >/dev/null 2>&1; then
     echo "Reinstalling dependencies into $VENV_DIR..."
-    pip install --quiet -r requirements.txt
+    pip install --quiet ".[dev]"
   fi
 else
   echo "demo.sh: $VENV_DIR exists but has no bin/activate (unsupported layout?)" >&2

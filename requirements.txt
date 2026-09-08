@@ -1,3 +1,0 @@
-# Runtime dependencies (mirror [project.dependencies] in pyproject.toml).
-scapy>=2.5.0,<3.0
-rich>=13.0.0,<16.0

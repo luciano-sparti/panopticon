@@ -10,6 +10,7 @@ thread never mutates store-owned state and never pays for deep copies.
 
 from __future__ import annotations
 
+import heapq
 import threading
 from collections import deque
 from collections.abc import Iterable
@@ -98,7 +99,7 @@ class StateStore:
         self._bytes_sec = 0.0
         self._avg_size = 0.0
         self._velocity_init = False
-        self._last_flush: float = 0.0
+        self._last_flush: float = self._clock.now()
         # Per-tick accumulation, drained by flush_velocity.
         self._acc_pkts = 0
         self._acc_bytes = 0
@@ -112,6 +113,8 @@ class StateStore:
         """Record a single packet event (stream, talkers, velocity, mix)."""
         ts = event.timestamp if now is None else now
         with self._lock:
+            if not self._velocity_init and self._last_flush > ts:
+                self._last_flush = ts
             self._stream.append(event)
             self._total_packets += 1
             self._total_bytes += event.size
@@ -183,6 +186,8 @@ class StateStore:
         """
         ts = self._clock.now() if now is None else now
         with self._lock:
+            if not self._velocity_init and self._last_flush > ts:
+                self._last_flush = ts
             dt = max(ts - self._last_flush, MIN_DT_EPSILON)
             if self._acc_pkts:
                 self._pps = EWMA_ALPHA * self._pps + EWMA_BETA * (self._acc_pkts / dt)
@@ -348,6 +353,8 @@ class StateStore:
                     }
                 )
                 rows.append(row)
+            if limit and len(rows) > limit:
+                return heapq.nlargest(limit, rows, key=lambda r: r["last_seen"])
             rows.sort(key=lambda r: r["last_seen"], reverse=True)
             return rows[:limit]
 

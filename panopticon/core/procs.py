@@ -31,6 +31,8 @@ def _read_text(path: str) -> str:
 def _all_socket_inodes(proc_root: str) -> set[str]:
     """Every socket inode currently referenced by some process's fd table."""
     inodes: set[str] = set()
+    if not os.path.isdir(proc_root):
+        return inodes
     try:
         entries = os.listdir(proc_root)
     except OSError:
