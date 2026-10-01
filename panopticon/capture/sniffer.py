@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import os
 import queue
+import socket
 import sys
 import threading
 from functools import partial
@@ -235,14 +236,10 @@ def handle_packet(
 # ----------------------------------------------------------------------
 
 
-class Sniffer:
-    """Async capture feeding ``(raw_bytes, PacketEvent)`` onto a queue.
+class AFPacketSniffer:
+    """Linux AF_PACKET raw socket capture feeding (raw_bytes, PacketEvent) onto a queue.
 
-    The underlying ``AsyncSniffer`` runs inside its own daemon thread with
-    ``store=False`` so Scapy never accumulates a frame backlog. The wrapper
-    thread only dispatches ``AsyncSniffer.start``; joining it fast-forwards
-    to the real capture loop, which is joined in ``join()`` so shutdown
-    actually waits for the capture socket to close.
+    Uses Linux AF_PACKET / SOCK_RAW for direct kernel packet ingestion.
     """
 
     def __init__(
@@ -253,16 +250,16 @@ class Sniffer:
         bpf_filter: str | None = None,
     ) -> None:
         self._interface = interface
-        self._bpf_filter = bpf_filter or None
-        self._sniffer = AsyncSniffer(
-            iface=interface,
-            filter=self._bpf_filter,
-            prn=partial(handle_packet, packet_queue, store),
-            store=False,
-        )
+        self._packet_queue = packet_queue
+        self._store = store
+        self._bpf_filter = bpf_filter
+        self._running = False
+        self._exception: BaseException | None = None
+        self._sock: socket.socket | None = None
+        self._stop_event = threading.Event()
         self._thread = threading.Thread(
-            target=self._sniffer.start,
-            name="panopticon-sniffer",
+            target=self._run,
+            name="panopticon-af-packet-sniffer",
             daemon=True,
         )
 
@@ -272,46 +269,150 @@ class Sniffer:
 
     @property
     def running(self) -> bool:
-        return bool(self._sniffer.running)
+        return self._running
 
     @property
     def exception(self) -> BaseException | None:
-        """Capture-thread exception, or ``None`` while capture is healthy.
-
-        Scapy's ``AsyncSniffer`` swallows capture errors into this attribute
-        (bad BPF filter, permission change, removed interface, ...); it is the
-        authoritative signal that capture has failed.
-        """
-        return self._sniffer.exception
+        return self._exception
 
     @property
     def capture_failed(self) -> bool:
-        """True once the capture loop has ended or raised an error."""
-        if self._sniffer.exception is not None:
-            return True
-        thread = self._sniffer.thread
-        if thread is None:
-            return False  # the internal sniffer has not been started yet
-        return not thread.is_alive() and not self._sniffer.running
+        return self._exception is not None or (not self._running and not self._stop_event.is_set())
 
     def start(self) -> None:
         self._thread.start()
 
+    def _run(self) -> None:
+        from scapy.layers.l2 import Ether
+
+        try:
+            if not hasattr(socket, "AF_PACKET"):
+                raise OSError("AF_PACKET is only supported on Linux")
+            eth_p_all = 0x0003
+            self._sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(eth_p_all))
+            if self._interface:
+                self._sock.bind((self._interface, 0))
+            self._sock.settimeout(0.5)
+            self._running = True
+            while not self._stop_event.is_set():
+                try:
+                    raw_data, _ = self._sock.recvfrom(65535)
+                except (socket.timeout, TimeoutError):
+                    continue
+                except OSError:
+                    break
+                if not raw_data:
+                    continue
+                try:
+                    pkt = Ether(raw_data)
+                    handle_packet(self._packet_queue, self._store, pkt)
+                except Exception:  # noqa: BLE001
+                    self._store.increment_parse_failure()
+        except BaseException as exc:  # noqa: BLE001
+            self._exception = exc
+        finally:
+            self._running = False
+            if self._sock is not None:
+                with contextlib.suppress(Exception):
+                    self._sock.close()
+
     def stop(self) -> None:
-        """Close the capture socket. Safe to call before the thread runs."""
-        if not getattr(self._sniffer, "running", False):
-            return
-        with contextlib.suppress(Exception):
-            self._sniffer.stop()
+        self._stop_event.set()
+        if self._sock is not None:
+            with contextlib.suppress(Exception):
+                self._sock.close()
 
     def join(self, timeout: float | None = None) -> None:
-        """Wait for the wrapper *and* the real capture loop to end.
-
-        The ``AsyncSniffer`` capture loop lives on its own thread (created
-        by ``AsyncSniffer.start``); joining only the wrapper thread would
-        return before the capture socket is actually closed.
-        """
         self._thread.join(timeout)
-        internal = self._sniffer.thread
-        if internal is not None and internal.is_alive():
-            internal.join(timeout)
+
+
+class Sniffer:
+    """Async capture feeding ``(raw_bytes, PacketEvent)`` onto a queue.
+
+    The underlying capture engine runs inside its own daemon thread with
+    ``store=False`` so Scapy never accumulates a frame backlog. Supports
+    either Scapy's ``AsyncSniffer`` or direct Linux ``AF_PACKET``.
+    """
+
+    def __init__(
+        self,
+        interface: str,
+        packet_queue: queue.Queue,
+        store,
+        bpf_filter: str | None = None,
+        engine: str = "scapy",
+    ) -> None:
+        self._interface = interface
+        self._bpf_filter = bpf_filter or None
+        self._engine = engine.lower().strip()
+        if self._engine == "af_packet" and hasattr(socket, "AF_PACKET"):
+            self._impl: Any = AFPacketSniffer(
+                interface=interface,
+                packet_queue=packet_queue,
+                store=store,
+                bpf_filter=self._bpf_filter,
+            )
+            self._sniffer = None
+            self._thread = None
+        else:
+            self._impl = None
+            self._sniffer = AsyncSniffer(
+                iface=interface,
+                filter=self._bpf_filter,
+                prn=partial(handle_packet, packet_queue, store),
+                store=False,
+            )
+            self._thread = threading.Thread(
+                target=self._sniffer.start,
+                name="panopticon-sniffer",
+                daemon=True,
+            )
+
+    @property
+    def interface(self) -> str:
+        return self._interface
+
+    @property
+    def running(self) -> bool:
+        if self._impl is not None:
+            return bool(self._impl.running)
+        return bool(self._sniffer.running)
+
+    @property
+    def exception(self) -> BaseException | None:
+        if self._impl is not None:
+            return self._impl.exception
+        return self._sniffer.exception
+
+    @property
+    def capture_failed(self) -> bool:
+        if self._impl is not None:
+            return bool(self._impl.capture_failed)
+        if self._sniffer.exception is not None:
+            return True
+        thread = self._sniffer.thread
+        if thread is None:
+            return False
+        return not thread.is_alive() and not self._sniffer.running
+
+    def start(self) -> None:
+        if self._impl is not None:
+            self._impl.start()
+        else:
+            self._thread.start()
+
+    def stop(self) -> None:
+        if self._impl is not None:
+            self._impl.stop()
+        elif getattr(self._sniffer, "running", False):
+            with contextlib.suppress(Exception):
+                self._sniffer.stop()
+
+    def join(self, timeout: float | None = None) -> None:
+        if self._impl is not None:
+            self._impl.join(timeout)
+        else:
+            self._thread.join(timeout)
+            internal = self._sniffer.thread
+            if internal is not None and internal.is_alive():
+                internal.join(timeout)

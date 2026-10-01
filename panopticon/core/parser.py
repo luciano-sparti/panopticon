@@ -109,6 +109,10 @@ def parse(pkt: Packet) -> PacketEvent:
         except Exception:  # noqa: BLE001
             payload = b""
 
+    sni = ""
+    if proto == "tcp" and payload:
+        sni = _tls_sni(payload)
+
     hostname, hostname_ip = _extract_hostname_info(proto, sport, dport, src, payload)
 
     service = service_for_port(dport) if dport else ""
@@ -125,6 +129,7 @@ def parse(pkt: Packet) -> PacketEvent:
         payload=payload,
         hostname=hostname,
         hostname_ip=hostname_ip,
+        sni=sni,
     )
 
 

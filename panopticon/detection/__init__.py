@@ -8,6 +8,7 @@ from .plaintext import PlaintextDetector
 from .port_knock import PortKnockDetector
 from .scan_probe import ScanProbeDetector
 from .syn_scan import SynScanDetector
+from .threat_intel import ThreatIntelDetector
 
 __all__ = [
     "ALERT_COOLDOWN",
@@ -20,4 +21,5 @@ __all__ = [
     "PortKnockDetector",
     "ScanProbeDetector",
     "SynScanDetector",
+    "ThreatIntelDetector",
 ]

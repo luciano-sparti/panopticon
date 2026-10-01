@@ -15,6 +15,7 @@ import threading
 import time
 from typing import Callable
 
+from panopticon.capture.presets import BPF_PRESETS
 from panopticon.core.procs import local_pids_for_port
 
 from .tables import DEFAULT_TOP_TALKERS, rank_talkers
@@ -50,6 +51,7 @@ def legend_text(enable_kill: bool = False) -> str:
         "↑/↓ select",
         "Space freeze",
         "m metric",
+        "f filter",
         "1-4 zoom",
         "Enter inspect",
         "p pin",
@@ -104,6 +106,7 @@ class UIControls:
         self.help_visible: bool = False
         # Alert severity filter: None=all, "warn"=warn+critical, "critical".
         self.alert_filter: str | None = None
+        self.active_preset: str = "all"
 
     # ------------------------------------------------------------------
     # Key input
@@ -202,6 +205,13 @@ class UIControls:
             self._set_status(f"alert filter: {label}")
         elif b in (b"k", b"K", b"x"):
             self._on_kill()
+        elif b in (b"f", b"F"):
+            preset_keys = list(BPF_PRESETS.keys())
+            idx = preset_keys.index(self.active_preset) if self.active_preset in preset_keys else 0
+            self.active_preset = preset_keys[(idx + 1) % len(preset_keys)]
+            info = BPF_PRESETS[self.active_preset]
+            filter_str = f" [{info['filter']}]" if info["filter"] else ""
+            self._set_status(f"preset: {info['name']}{filter_str}")
         elif b == b"p":
             self._toggle_pin()
 

@@ -25,6 +25,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
+from panopticon.capture.presets import get_preset, match_preset_event
 from panopticon.core.store import StateStore
 
 from .keys import VIEW_MODE_NAMES, UIControls, legend_text
@@ -160,7 +161,14 @@ def build_layout(
         layout["header"].update(header)
         return layout
 
-    stream_title = "Stream [⏸ PAUSED]" if paused else "Stream [LIVE]"
+    active_preset = getattr(controls, "active_preset", "all") if controls is not None else "all"
+    if active_preset and active_preset != "all":
+        events = [e for e in events if match_preset_event(e, active_preset)]
+        preset_info = get_preset(active_preset)
+        p_name = preset_info["name"] if preset_info else active_preset
+        stream_title = f"Stream [Filter: {p_name}]" + (" [⏸ PAUSED]" if paused else " [LIVE]")
+    else:
+        stream_title = "Stream [⏸ PAUSED]" if paused else "Stream [LIVE]"
     stream_panel = Panel(
         render_stream_table(events, self_ips=store.self_ips()),
         title=stream_title,

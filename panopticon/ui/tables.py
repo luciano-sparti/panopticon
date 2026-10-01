@@ -165,6 +165,7 @@ def render_top_talkers(
     )
     table.add_column("Host", style="bold", no_wrap=True)
     has_names = False
+    has_geo = False
     ranked = rank_talkers(talkers, metric)[:top_n]
     maximum = (
         bar_peak
@@ -174,6 +175,9 @@ def render_top_talkers(
     if any(stats.get("name") for _, stats in ranked):
         has_names = True
         table.add_column("Name", no_wrap=True)
+    if any(stats.get("geo") or stats.get("asn") for _, stats in ranked):
+        has_geo = True
+        table.add_column("Geo/ASN", no_wrap=True)
     table.add_column("Packets", justify="right")
     table.add_column("Bytes", justify="right")
     table.add_column("Rate", justify="right", no_wrap=True)
@@ -196,9 +200,13 @@ def render_top_talkers(
 
         rate = (rates or {}).get(ip, 0.0)
         name = stats.get("name") or ""
+        geo = stats.get("geo") or ""
+        asn = stats.get("asn") or ""
+        geo_str = f"{geo} · {asn}" if (geo and asn) else (geo or asn)
         row = [
             host,
             name if has_names else None,
+            geo_str if has_geo else None,
             f"{stats.get('pkts', 0):,}",
             f"{_fmt_bytes(stats.get('bytes', 0))}",
             f"{_fmt_bytes(rate)}/s" if rate >= 1 else "—",

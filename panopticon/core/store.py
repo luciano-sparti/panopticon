@@ -17,6 +17,7 @@ from collections.abc import Iterable
 
 from . import identity
 from .clock import Clock
+from .enrichment import GeoEnricher, get_default_enricher
 from .event import AlertEvent, PacketEvent
 from .lru import evict_lru
 from .names import HostnameResolver, classify_ip
@@ -55,9 +56,11 @@ class StateStore:
         self_host: str | None = None,
         clock: Clock | None = None,
         names: HostnameResolver | None = None,
+        enricher: GeoEnricher | None = None,
     ) -> None:
         self._clock = clock if clock is not None else Clock()
         self._names = names
+        self._enricher = enricher or get_default_enricher()
         self._lock = threading.RLock()
         self._stream: deque[PacketEvent] = deque(maxlen=STREAM_MAXLEN)
         self._alerts: deque[AlertEvent] = deque(maxlen=ALERTS_MAXLEN)
@@ -156,6 +159,9 @@ class StateStore:
                         }
                         if len(self._top_talkers) > MAX_TALKERS:
                             self._evict_lru_talker()
+
+            if event.sni and event.dst:
+                self._hostnames[event.dst] = event.sni
 
             self._track_session(event, ts)
 
@@ -312,6 +318,15 @@ class StateStore:
                 if not name and self._names is not None:
                     name = self._names.name_for(ip)
                 talker["name"] = name or ""
+                geo_info = self._enricher.lookup_geo_asn(ip)
+                if geo_info is not None:
+                    talker["geo"] = geo_info.country_code
+                    talker["asn"] = geo_info.asn
+                    talker["org"] = geo_info.org
+                else:
+                    talker["geo"] = ""
+                    talker["asn"] = ""
+                    talker["org"] = ""
             return snap
 
     def snapshot_tags(self) -> dict[str, list[str]]:

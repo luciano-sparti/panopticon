@@ -35,8 +35,16 @@ else:
         tomllib = None
 
 from panopticon import __version__
-from panopticon.capture import Sniffer, auto_detect_interface, preflight, validate_bpf_filter
+from panopticon.capture import (
+    BPF_PRESETS,
+    Sniffer,
+    auto_detect_interface,
+    preflight,
+    resolve_preset_filter,
+    validate_bpf_filter,
+)
 from panopticon.core.clock import Clock
+from panopticon.core.enrichment import GeoEnricher
 from panopticon.core.names import HostnameResolver
 from panopticon.core.store import StateStore
 from panopticon.detection import (
@@ -48,6 +56,7 @@ from panopticon.detection import (
     PortKnockDetector,
     ScanProbeDetector,
     SynScanDetector,
+    ThreatIntelDetector,
 )
 from panopticon.export import AlertExportWriter, CsvExportWriter, PcapExportWriter
 from panopticon.pipeline import PipelineWorker
@@ -205,6 +214,28 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="JSONL path for detector alerts (default: session.alerts.jsonl)",
     )
+    parser.add_argument(
+        "--preset",
+        choices=list(BPF_PRESETS.keys()),
+        default="",
+        help="Predefined BPF filter preset (web, dns, non-lan, suspicious-ports)",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["scapy", "af_packet"],
+        default="scapy",
+        help="Packet ingestion engine: scapy or Linux af_packet (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--threat-feed",
+        default="",
+        help="Optional threat intelligence feed file (.json or .txt IP list)",
+    )
+    parser.add_argument(
+        "--asn-db",
+        default="",
+        help="Optional custom GeoIP / ASN database (.json or .csv)",
+    )
     return parser
 
 
@@ -306,6 +337,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"panopticon: {problem}", file=sys.stderr)
         return 2
 
+    if args.preset and not args.filter:
+        args.filter = resolve_preset_filter(args.preset)
+
     bpf_problem = validate_bpf_filter(interface, args.filter or None)
     if bpf_problem:
         print(f"panopticon: {bpf_problem}", file=sys.stderr)
@@ -313,7 +347,11 @@ def main(argv: list[str] | None = None) -> int:
 
     clock = Clock()
     resolver = HostnameResolver(enabled=args.resolve_hosts)
-    store = StateStore(clock=clock, names=resolver)
+    enricher = GeoEnricher(
+        custom_asn_db=args.asn_db or None,
+        threat_feed=args.threat_feed or None,
+    )
+    store = StateStore(clock=clock, names=resolver, enricher=enricher)
     if args.tags_file:
         _load_tags(store, args.tags_file)
     packet_queue: queue.Queue = queue.Queue(maxsize=args.queue_size)
@@ -359,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
                 threshold=args.portknock_port_count,
                 window=args.portknock_window,
             ),
+            ThreatIntelDetector(enricher=enricher),
         ],
         cooldown=args.alert_cooldown,
         clock=clock,
@@ -370,7 +409,15 @@ def main(argv: list[str] | None = None) -> int:
         detector=detector,
         alert_exporter=alert_exporter,
     )
-    sniffer = Sniffer(interface, packet_queue, store, bpf_filter=args.filter or None)
+    sniffer_kwargs: dict = {"bpf_filter": args.filter or None}
+    if getattr(args, "engine", "scapy") != "scapy":
+        sniffer_kwargs["engine"] = args.engine
+    sniffer = Sniffer(
+        interface,
+        packet_queue,
+        store,
+        **sniffer_kwargs,
+    )
 
     shutdown = threading.Event()
     keyboard_stop = threading.Event()

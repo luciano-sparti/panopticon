@@ -43,6 +43,7 @@ class PacketEvent:
     payload: bytes = b""
     hostname: str = ""
     hostname_ip: str = ""
+    sni: str = ""
 
 
 @dataclass(frozen=True)
