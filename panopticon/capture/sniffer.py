@@ -376,35 +376,41 @@ class Sniffer:
     def running(self) -> bool:
         if self._impl is not None:
             return bool(self._impl.running)
-        return bool(self._sniffer.running)
+        if self._sniffer is not None:
+            return bool(self._sniffer.running)
+        return False
 
     @property
     def exception(self) -> BaseException | None:
         if self._impl is not None:
             return self._impl.exception
-        return self._sniffer.exception
+        if self._sniffer is not None:
+            return self._sniffer.exception
+        return None
 
     @property
     def capture_failed(self) -> bool:
         if self._impl is not None:
             return bool(self._impl.capture_failed)
-        if self._sniffer.exception is not None:
-            return True
-        thread = self._sniffer.thread
-        if thread is None:
-            return False
-        return not thread.is_alive() and not self._sniffer.running
+        if self._sniffer is not None:
+            if self._sniffer.exception is not None:
+                return True
+            thread = self._sniffer.thread
+            if thread is None:
+                return False
+            return not thread.is_alive() and not self._sniffer.running
+        return False
 
     def start(self) -> None:
         if self._impl is not None:
             self._impl.start()
-        else:
+        elif self._thread is not None:
             self._thread.start()
 
     def stop(self) -> None:
         if self._impl is not None:
             self._impl.stop()
-        elif getattr(self._sniffer, "running", False):
+        elif self._sniffer is not None and getattr(self._sniffer, "running", False):
             with contextlib.suppress(Exception):
                 self._sniffer.stop()
 
@@ -412,7 +418,9 @@ class Sniffer:
         if self._impl is not None:
             self._impl.join(timeout)
         else:
-            self._thread.join(timeout)
-            internal = self._sniffer.thread
-            if internal is not None and internal.is_alive():
-                internal.join(timeout)
+            if self._thread is not None:
+                self._thread.join(timeout)
+            if self._sniffer is not None:
+                internal = self._sniffer.thread
+                if internal is not None and internal.is_alive():
+                    internal.join(timeout)

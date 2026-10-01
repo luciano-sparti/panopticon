@@ -16,7 +16,7 @@ import json
 import os
 import threading
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Union
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ class ThreatIntelInfo:
 
 # Built-in curated offline ASN and Geo database for major global infrastructures,
 # CDNs, cloud providers, and authoritative resolvers.
-_ASNRangeItem = tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str, str, str, str]
+_ASNRangeItem = tuple[Union[ipaddress.IPv4Network, ipaddress.IPv6Network], str, str, str, str]
 _BUILTIN_ASN_RANGES: list[_ASNRangeItem] = [
     # Google
     (ipaddress.ip_network("8.8.8.0/24"), "US", "United States", "AS15169", "Google LLC"),
