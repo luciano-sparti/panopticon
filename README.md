@@ -61,9 +61,13 @@ It gives system administrators, security engineers, and developers an immediate,
 ## ✨ Features
 
 ### 📡 High-Throughput Packet Ingestion
-- **Asynchronous Decoupled Capture**: Runs Scapy's `AsyncSniffer` in a dedicated background daemon thread with non-blocking queueing, preventing packet drops during network bursts.
+- **Linux `AF_PACKET` Capture Engine**: Raw Linux socket capture backend bypassing user-space libpcap overhead, with transparent fallback to Scapy.
+- **Dynamic BPF Filter Presets**: Cycle instantly through pre-compiled BPF filter profiles (`ALL`, `WEB`, `DNS`, `SSH/TELNET`, `NON-LAN`, `HIGH-PORTS`) on the fly with the `f` hotkey.
+- **Asynchronous Decoupled Capture**: Dedicated background daemon thread with non-blocking queueing, preventing packet drops during network bursts.
 - **Fail-Fast BPF Preflight**: Validates Berkeley Packet Filter (BPF) expressions up-front before starting capture to prevent runtime capture errors.
 - **Wire-Fidelity Extraction**: Captures raw byte fidelity (`pkt.original`) directly into streaming PCAP output without re-serialization artifacts.
+- **Offline GeoIP & ASN Enrichment**: Instant offline mapping of remote destination IPs to country codes, ASNs, and registered organizations (e.g. `US · AS15169 Google LLC`).
+- **TLS SNI Extraction**: Intercepts TLS Client Hello messages to identify domain names on encrypted flows before certificates are exchanged.
 
 ### 📊 Real-Time Interactive Dashboard
 - **4-Pane Live Layout**: Live packet stream, ranked top talkers, real-time EWMA velocity telemetry, and active security alerts.
@@ -206,6 +210,7 @@ The dashboard is non-blocking and fully controllable via hotkeys:
 | `q` / `Ctrl+C` | **Quit** | Drains queues, closes capture sockets, and flushes all exports to disk. |
 | `↑` / `↓` (or `j` / `k`) | **Select Talker** | Moves the cursor highlight across top talkers. |
 | `Space` | **Freeze / Resume** | Freezes the stream display for inspection (`PAUSED` ⇄ `LIVE`). |
+| `f` | **Cycle BPF Preset** | Cycles through active capture presets (`ALL` $\rightarrow$ `WEB` $\rightarrow$ `DNS` $\rightarrow$ `SSH` $\rightarrow$ `NON-LAN` $\rightarrow$ `HIGH-PORTS`). |
 | `m` | **Toggle Metric** | Toggles talker sorting between **Bytes** and **Packets**. |
 | `1` – `4` | **Zoom Panel** | Zooms into **1** (Stream), **2** (Talkers), **3** (Alerts), or **4** (Telemetry). |
 | `0` / `Tab` | **Restore / Cycle** | Restores the default 4-pane layout or cycles through zoom views. |
